@@ -13,6 +13,7 @@ import {
   Settings,
   Layers3,
 } from "lucide-react";
+import LogoutButton from "../logoutButton/LogoutButton";
 
 const menuItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -20,7 +21,11 @@ const menuItems = [
   { label: "Import Leads", href: "/dashboard/import", icon: FileUp },
   { label: "Duplicates", href: "/dashboard/duplicates", icon: CopyCheck },
   { label: "Workspaces", href: "/dashboard/workspaces", icon: Building2 },
-  { label: "Analytics", href: "/dashboard/analytics", icon: ChartNoAxesCombined },
+  {
+    label: "Analytics",
+    href: "/dashboard/analytics",
+    icon: ChartNoAxesCombined,
+  },
   { label: "Team Members", href: "/dashboard/team", icon: UserRoundCog },
   { label: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
@@ -68,11 +73,12 @@ export default function Navbar() {
           );
         })}
       </nav>
+      <div className="px-4 pb-4">
+        <LogoutButton />
+      </div>
 
       <div className="border-t border-slate-100 p-5">
-        <p className="text-xs text-slate-400">
-          © 2026 LeadFlow
-        </p>
+        <p className="text-xs text-slate-400">© 2026 LeadFlow</p>
       </div>
     </aside>
   );
