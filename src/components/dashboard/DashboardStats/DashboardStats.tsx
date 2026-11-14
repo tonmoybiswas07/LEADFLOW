@@ -1,97 +1,76 @@
 import {
   Users,
   UserPlus,
-  Target,
+  CheckCircle2,
   TrendingUp,
-  ArrowUpRight,
-  ArrowDownRight,
 } from "lucide-react";
 
-const stats = [
-  {
-    title: "Total Leads",
-    value: "12,450",
-    change: "+12.8%",
-    trend: "up",
-    description: "vs. previous month",
-    icon: Users,
-    bg: "bg-teal-50",
-    color: "text-teal-600",
-  },
-  {
-    title: "New Leads",
-    value: "2,840",
-    change: "+8.2%",
-    trend: "up",
-    description: "vs. previous month",
-    icon: UserPlus,
-    bg: "bg-blue-50",
-    color: "text-blue-600",
-  },
-  {
-    title: "Converted Leads",
-    value: "1,280",
-    change: "+18.4%",
-    trend: "up",
-    description: "vs. previous month",
-    icon: Target,
-    bg: "bg-violet-50",
-    color: "text-violet-600",
-  },
-  {
-    title: "Conversion Rate",
-    value: "10.3%",
-    change: "-2.1%",
-    trend: "down",
-    description: "vs. previous month",
-    icon: TrendingUp,
-    bg: "bg-orange-50",
-    color: "text-orange-600",
-  },
-];
+import type { DashboardData } from "@/types/dashboard";
 
-export default function DashboardStats() {
+interface Props {
+  stats?: DashboardData["stats"];
+}
+
+export default function DashboardStats({ stats }: Props) {
+  const safeStats = stats ?? {
+    totalLeads: 0,
+    newLeads: 0,
+    convertedLeads: 0,
+    conversionRate: 0,
+  };
+
+  const cards = [
+    {
+      title: "Total Leads",
+      value: safeStats.totalLeads.toLocaleString(),
+      icon: Users,
+      color: "text-teal-600",
+      background: "bg-teal-50",
+    },
+    {
+      title: "New Leads",
+      value: safeStats.newLeads.toLocaleString(),
+      icon: UserPlus,
+      color: "text-blue-600",
+      background: "bg-blue-50",
+    },
+    {
+      title: "Converted Leads",
+      value: safeStats.convertedLeads.toLocaleString(),
+      icon: CheckCircle2,
+      color: "text-emerald-600",
+      background: "bg-emerald-50",
+    },
+    {
+      title: "Conversion Rate",
+      value: `${safeStats.conversionRate}%`,
+      icon: TrendingUp,
+      color: "text-violet-600",
+      background: "bg-violet-50",
+    },
+  ];
+
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-      {stats.map((stat) => {
-        const Icon = stat.icon;
-        const isUp = stat.trend === "up";
+      {cards.map((card) => {
+        const Icon = card.icon;
 
         return (
           <div
-            key={stat.title}
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md"
+            key={card.title}
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
           >
-            <div className="flex items-start justify-between">
-              <div className={`rounded-xl p-3 ${stat.bg} ${stat.color}`}>
-                <Icon size={23} />
-              </div>
-
-              <div
-                className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                  isUp
-                    ? "bg-emerald-50 text-emerald-600"
-                    : "bg-red-50 text-red-600"
-                }`}
-              >
-                {isUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                {stat.change}
-              </div>
+            <div className={`w-fit rounded-xl p-3 ${card.background}`}>
+              <Icon size={22} className={card.color} />
             </div>
 
-            <div className="mt-5">
-              <p className="text-sm font-medium text-slate-500">
-                {stat.title}
-              </p>
+            <p className="mt-5 text-sm font-medium text-slate-500">
+              {card.title}
+            </p>
 
-              <h3 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
-                {stat.value}
-              </h3>
-
-              <p className="mt-2 text-xs text-slate-400">
-                {stat.description}
-              </p>
-            </div>
+            <h3 className="mt-2 text-3xl font-bold text-slate-900">
+              {card.value}
+            </h3>
           </div>
         );
       })}

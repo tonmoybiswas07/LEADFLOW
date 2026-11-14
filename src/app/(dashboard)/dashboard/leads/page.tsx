@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Plus,
   Search,
@@ -12,11 +12,15 @@ import {
   Mail,
   Building2,
   Phone,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
 import {
   Dialog,
   DialogContent,
@@ -25,6 +29,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,6 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+
 import {
   Select,
   SelectContent,
@@ -43,93 +49,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type LeadStatus =
-  | "New"
-  | "Contacted"
-  | "Qualified"
-  | "Converted"
-  | "Lost";
+import {
+  leadStatuses,
+  type Lead,
+  type LeadInput,
+  type LeadStatus,
+} from "@/types/lead";
 
-interface Lead {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  company: string;
-  status: LeadStatus;
-  source: string;
-  createdAt: string;
-}
+const PAGE_SIZE = 5;
 
-type LeadForm = Pick<
-  Lead,
-  "name" | "email" | "phone" | "company" | "status" | "source"
->;
-
-const initialLeads: Lead[] = [
-  {
-    id: "1",
-    name: "John Smith",
-    email: "john@example.com",
-    phone: "+1 202 555 0101",
-    company: "Acme Inc.",
-    status: "New",
-    source: "Website",
-    createdAt: "2026-11-14",
-  },
-  {
-    id: "2",
-    name: "Sarah Johnson",
-    email: "sarah@example.com",
-    phone: "+1 202 555 0102",
-    company: "TechCorp",
-    status: "Qualified",
-    source: "LinkedIn",
-    createdAt: "2026-11-13",
-  },
-  {
-    id: "3",
-    name: "Michael Brown",
-    email: "michael@example.com",
-    phone: "+1 202 555 0103",
-    company: "StartupX",
-    status: "Contacted",
-    source: "Referral",
-    createdAt: "2026-11-12",
-  },
-  {
-    id: "4",
-    name: "Emily Davis",
-    email: "emily@example.com",
-    phone: "+1 202 555 0104",
-    company: "DesignHub",
-    status: "Converted",
-    source: "Facebook",
-    createdAt: "2026-11-11",
-  },
-  {
-    id: "5",
-    name: "David Wilson",
-    email: "david@example.com",
-    phone: "+1 202 555 0105",
-    company: "GrowthLab",
-    status: "Lost",
-    source: "Website",
-    createdAt: "2026-11-10",
-  },
-  {
-    id: "6",
-    name: "Jessica Miller",
-    email: "jessica@example.com",
-    phone: "+1 202 555 0106",
-    company: "BrightTech",
-    status: "New",
-    source: "LinkedIn",
-    createdAt: "2026-11-09",
-  },
-];
-
-const emptyForm: LeadForm = {
+const emptyForm: LeadInput = {
   name: "",
   email: "",
   phone: "",
@@ -146,18 +75,31 @@ const statusStyles: Record<LeadStatus, string> = {
   Lost: "bg-red-50 text-red-700",
 };
 
-const statuses: LeadStatus[] = [
-  "New",
-  "Contacted",
-  "Qualified",
-  "Converted",
-  "Lost",
+const sources = [
+  "Website",
+  "LinkedIn",
+  "Facebook",
+  "Referral",
+  "Other",
 ];
 
-const PAGE_SIZE = 5;
+async function readResponse(response: Response) {
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(data?.message || "Something went wrong");
+  }
+
+  return data;
+}
 
 export default function AllLeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>(initialLeads);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -165,8 +107,49 @@ export default function AllLeadsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [form, setForm] = useState<LeadForm>(emptyForm);
+  const [form, setForm] = useState<LeadInput>({ ...emptyForm });
 
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Fetch leads from MongoDB API
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function fetchLeads() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await fetch("/api/leads", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const data = await readResponse(response);
+
+        if (!controller.signal.aborted) {
+          setLeads(data);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          const message =
+            err instanceof Error ? err.message : "Failed to load leads";
+
+          setError(message);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchLeads();
+
+    return () => controller.abort();
+  }, [refreshKey]);
+
+  // Search + filter
   const filteredLeads = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
@@ -197,14 +180,17 @@ export default function AllLeadsPage() {
     currentPage * PAGE_SIZE
   );
 
+  // Add modal
   const openAddModal = () => {
     setEditingId(null);
     setForm({ ...emptyForm });
     setModalOpen(true);
   };
 
+  // Edit modal
   const openEditModal = (lead: Lead) => {
     setEditingId(lead.id);
+
     setForm({
       name: lead.name,
       email: lead.email,
@@ -213,72 +199,120 @@ export default function AllLeadsPage() {
       status: lead.status,
       source: lead.source,
     });
+
     setModalOpen(true);
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  // Create / Update lead
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const normalizedEmail = form.email.trim().toLowerCase();
+    if (saving) return;
 
-    if (!form.name.trim() || !normalizedEmail) return;
+    try {
+      setSaving(true);
 
-    const duplicate = leads.some(
-      (lead) =>
-        lead.email.toLowerCase() === normalizedEmail &&
-        lead.id !== editingId
-    );
+      const isEditing = Boolean(editingId);
+      const url = isEditing
+        ? `/api/leads/${editingId}`
+        : "/api/leads";
 
-    if (duplicate) {
-      alert("A lead with this email already exists.");
-      return;
-    }
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...form,
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
+          phone: form.phone.trim(),
+          company: form.company.trim(),
+        }),
+      });
 
-    const payload: LeadForm = {
-      ...form,
-      name: form.name.trim(),
-      email: normalizedEmail,
-      phone: form.phone.trim(),
-      company: form.company.trim(),
-    };
+      const savedLead: Lead = await readResponse(response);
 
-    if (editingId) {
-      setLeads((previous) =>
-        previous.map((lead) =>
-          lead.id === editingId
-            ? { ...lead, ...payload }
-            : lead
-        )
+      if (isEditing) {
+        setLeads((previous) =>
+          previous.map((lead) =>
+            lead.id === editingId ? savedLead : lead
+          )
+        );
+
+        toast.success("Lead updated successfully!");
+      } else {
+        setLeads((previous) => [savedLead, ...previous]);
+        toast.success("New lead added successfully!");
+      }
+
+      setPage(1);
+      setModalOpen(false);
+      setEditingId(null);
+      setForm({ ...emptyForm });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save lead"
       );
-    } else {
-      const newLead: Lead = {
-        ...payload,
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString().slice(0, 10),
-      };
-
-      setLeads((previous) => [newLead, ...previous]);
+    } finally {
+      setSaving(false);
     }
-
-    setPage(1);
-    setModalOpen(false);
-    setEditingId(null);
-    setForm({ ...emptyForm });
   };
 
-  const handleDelete = () => {
-    if (!deleteId) return;
+  // Delete lead
+  const handleDelete = async () => {
+    if (!deleteId || deleting) return;
 
-    setLeads((previous) =>
-      previous.filter((lead) => lead.id !== deleteId)
-    );
+    try {
+      setDeleting(true);
 
-    setDeleteId(null);
+      const response = await fetch(`/api/leads/${deleteId}`, {
+        method: "DELETE",
+      });
+
+      await readResponse(response);
+
+      setLeads((previous) =>
+        previous.filter((lead) => lead.id !== deleteId)
+      );
+
+      toast.success("Lead deleted successfully!");
+      setDeleteId(null);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete lead"
+      );
+    } finally {
+      setDeleting(false);
+    }
   };
+
+  const stats = [
+    {
+      title: "Total Leads",
+      value: leads.length,
+      color: "text-slate-900",
+    },
+    {
+      title: "New Leads",
+      value: leads.filter((lead) => lead.status === "New").length,
+      color: "text-teal-600",
+    },
+    {
+      title: "Qualified",
+      value: leads.filter((lead) => lead.status === "Qualified").length,
+      color: "text-violet-600",
+    },
+    {
+      title: "Converted",
+      value: leads.filter((lead) => lead.status === "Converted").length,
+      color: "text-emerald-600",
+    },
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
+      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 text-sm font-medium text-teal-600">
@@ -295,46 +329,40 @@ export default function AllLeadsPage() {
           </p>
         </div>
 
-        <Button
-          onClick={openAddModal}
-          className="rounded-xl bg-teal-600 hover:bg-teal-700"
-        >
-          <Plus size={18} className="mr-2" />
-          Add New Lead
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setRefreshKey((key) => key + 1)}
+            disabled={loading}
+            aria-label="Refresh leads"
+          >
+            <RefreshCw
+              size={17}
+              className={loading ? "animate-spin" : ""}
+            />
+          </Button>
+
+          <Button
+            onClick={openAddModal}
+            className="rounded-xl bg-teal-600 hover:bg-teal-700"
+          >
+            <Plus size={18} className="mr-2" />
+            Add New Lead
+          </Button>
+        </div>
       </div>
 
       {/* Statistics */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {[
-          {
-            title: "Total Leads",
-            value: leads.length,
-            color: "text-slate-900",
-          },
-          {
-            title: "New Leads",
-            value: leads.filter((lead) => lead.status === "New").length,
-            color: "text-teal-600",
-          },
-          {
-            title: "Qualified",
-            value: leads.filter((lead) => lead.status === "Qualified").length,
-            color: "text-violet-600",
-          },
-          {
-            title: "Converted",
-            value: leads.filter((lead) => lead.status === "Converted").length,
-            color: "text-emerald-600",
-          },
-        ].map((stat) => (
+        {stats.map((stat) => (
           <div
             key={stat.title}
             className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
           >
             <p className="text-sm text-slate-500">{stat.title}</p>
+
             <h2 className={`mt-2 text-3xl font-bold ${stat.color}`}>
-              {stat.value}
+              {loading ? "..." : stat.value}
             </h2>
           </div>
         ))}
@@ -372,7 +400,8 @@ export default function AllLeadsPage() {
 
           <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
-            {statuses.map((status) => (
+
+            {leadStatuses.map((status) => (
               <SelectItem key={status} value={status}>
                 {status}
               </SelectItem>
@@ -381,8 +410,17 @@ export default function AllLeadsPage() {
         </Select>
       </div>
 
-      {/* Leads Table */}
+      {/* Table */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        {error && (
+          <div
+            role="alert"
+            className="border-b border-red-100 bg-red-50 px-5 py-4 text-sm text-red-700"
+          >
+            {error}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="border-b border-slate-100 bg-slate-50 text-xs uppercase text-slate-500">
@@ -398,85 +436,100 @@ export default function AllLeadsPage() {
             </thead>
 
             <tbody>
-              {paginatedLeads.map((lead) => (
-                <tr
-                  key={lead.id}
-                  className="border-b border-slate-100 last:border-0 hover:bg-slate-50"
-                >
-                  <td className="px-5 py-4">
-                    <p className="font-semibold text-slate-800">
-                      {lead.name}
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="py-20 text-center">
+                    <Loader2
+                      size={30}
+                      className="mx-auto animate-spin text-teal-600"
+                    />
+                    <p className="mt-3 text-sm text-slate-500">
+                      Loading leads...
                     </p>
-                    <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                      <Mail size={13} />
-                      {lead.email}
-                    </p>
-                  </td>
-
-                  <td className="px-5 py-4">
-                    <span className="flex items-center gap-2 text-slate-600">
-                      <Building2 size={15} />
-                      {lead.company || "—"}
-                    </span>
-                  </td>
-
-                  <td className="px-5 py-4">
-                    <span className="flex items-center gap-2 text-slate-600">
-                      <Phone size={14} />
-                      {lead.phone || "—"}
-                    </span>
-                  </td>
-
-                  <td className="px-5 py-4">
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[lead.status]}`}
-                    >
-                      {lead.status}
-                    </span>
-                  </td>
-
-                  <td className="px-5 py-4 text-slate-600">
-                    {lead.source}
-                  </td>
-
-                  <td className="px-5 py-4 text-slate-500">
-                    {lead.createdAt}
-                  </td>
-
-                  <td className="px-5 py-4">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label={`Edit ${lead.name}`}
-                        onClick={() => openEditModal(lead)}
-                      >
-                        <Pencil size={16} />
-                      </Button>
-
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label={`Delete ${lead.name}`}
-                        onClick={() => setDeleteId(lead.id)}
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                      >
-                        <Trash2 size={16} />
-                      </Button>
-                    </div>
                   </td>
                 </tr>
-              ))}
-
-              {paginatedLeads.length === 0 && (
+              ) : paginatedLeads.length === 0 ? (
                 <tr>
                   <td
                     colSpan={7}
                     className="px-6 py-16 text-center text-slate-500"
                   >
-                    No leads found. Try another search or add a lead.
+                    {error
+                      ? "Unable to load leads. Please retry."
+                      : "No leads found. Try another search or add a lead."}
                   </td>
                 </tr>
+              ) : (
+                paginatedLeads.map((lead) => (
+                  <tr
+                    key={lead.id}
+                    className="border-b border-slate-100 last:border-0 hover:bg-slate-50"
+                  >
+                    <td className="px-5 py-4">
+                      <p className="font-semibold text-slate-800">
+                        {lead.name}
+                      </p>
+
+                      <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
+                        <Mail size={13} />
+                        {lead.email}
+                      </p>
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <span className="flex items-center gap-2 text-slate-600">
+                        <Building2 size={15} />
+                        {lead.company || "—"}
+                      </span>
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <span className="flex items-center gap-2 text-slate-600">
+                        <Phone size={14} />
+                        {lead.phone || "—"}
+                      </span>
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[lead.status]}`}
+                      >
+                        {lead.status}
+                      </span>
+                    </td>
+
+                    <td className="px-5 py-4 text-slate-600">
+                      {lead.source}
+                    </td>
+
+                    <td className="px-5 py-4 text-slate-500">
+                      {lead.createdAt}
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          aria-label={`Edit ${lead.name}`}
+                          onClick={() => openEditModal(lead)}
+                        >
+                          <Pencil size={16} />
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          aria-label={`Delete ${lead.name}`}
+                          onClick={() => setDeleteId(lead.id)}
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
@@ -485,7 +538,8 @@ export default function AllLeadsPage() {
         {/* Pagination */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
           <p className="text-sm text-slate-500">
-            Showing {filteredLeads.length === 0
+            Showing{" "}
+            {filteredLeads.length === 0
               ? 0
               : (currentPage - 1) * PAGE_SIZE + 1}
             {" - "}
@@ -521,7 +575,12 @@ export default function AllLeadsPage() {
       </div>
 
       {/* Add / Edit Modal */}
-      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+      <Dialog
+        open={modalOpen}
+        onOpenChange={(open) => {
+          if (!saving) setModalOpen(open);
+        }}
+      >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -590,6 +649,7 @@ export default function AllLeadsPage() {
 
               <div className="space-y-2">
                 <Label>Status</Label>
+
                 <Select
                   value={form.status}
                   onValueChange={(value) =>
@@ -604,7 +664,7 @@ export default function AllLeadsPage() {
                   </SelectTrigger>
 
                   <SelectContent>
-                    {statuses.map((status) => (
+                    {leadStatuses.map((status) => (
                       <SelectItem key={status} value={status}>
                         {status}
                       </SelectItem>
@@ -615,6 +675,7 @@ export default function AllLeadsPage() {
 
               <div className="space-y-2">
                 <Label>Source</Label>
+
                 <Select
                   value={form.source}
                   onValueChange={(value) =>
@@ -626,13 +687,11 @@ export default function AllLeadsPage() {
                   </SelectTrigger>
 
                   <SelectContent>
-                    {["Website", "LinkedIn", "Facebook", "Referral", "Other"].map(
-                      (source) => (
-                        <SelectItem key={source} value={source}>
-                          {source}
-                        </SelectItem>
-                      )
-                    )}
+                    {sources.map((source) => (
+                      <SelectItem key={source} value={source}>
+                        {source}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -642,6 +701,7 @@ export default function AllLeadsPage() {
               <Button
                 type="button"
                 variant="outline"
+                disabled={saving}
                 onClick={() => setModalOpen(false)}
               >
                 Cancel
@@ -649,9 +709,18 @@ export default function AllLeadsPage() {
 
               <Button
                 type="submit"
+                disabled={saving}
                 className="bg-teal-600 hover:bg-teal-700"
               >
-                {editingId ? "Save Changes" : "Add Lead"}
+                {saving && (
+                  <Loader2 size={16} className="mr-2 animate-spin" />
+                )}
+
+                {saving
+                  ? "Saving..."
+                  : editingId
+                    ? "Save Changes"
+                    : "Add Lead"}
               </Button>
             </DialogFooter>
           </form>
@@ -662,26 +731,36 @@ export default function AllLeadsPage() {
       <AlertDialog
         open={deleteId !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleteId(null);
+          if (!open && !deleting) setDeleteId(null);
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this lead?</AlertDialogTitle>
+
             <AlertDialogDescription>
-              This will remove the lead from the current list.
-              This action cannot be undone in this session.
+              This will permanently delete the lead from MongoDB.
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>
+              Cancel
+            </AlertDialogCancel>
 
             <AlertDialogAction
-              onClick={handleDelete}
+              disabled={deleting}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDelete();
+              }}
               className="bg-red-600 text-white hover:bg-red-700"
             >
-              Delete Lead
+              {deleting && (
+                <Loader2 size={16} className="mr-2 animate-spin" />
+              )}
+              {deleting ? "Deleting..." : "Delete Lead"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
