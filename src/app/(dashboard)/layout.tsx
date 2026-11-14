@@ -1,9 +1,9 @@
 import Navbar from "@/components/dashboard/Navbar/Navbar";
+import Sidebar from "@/components/dashboard/Sidebar/Sidebar";
+
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-
-
 
 export default async function DashboardLayout({
   children,
@@ -21,7 +21,7 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 lg:block">
-        {/* <Sideba /> */}
+        <Sidebar />
       </div>
 
       <div className="min-w-0 lg:pl-64">
