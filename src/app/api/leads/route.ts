@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { MongoServerError } from "mongodb";
+import { MongoServerError, ObjectId } from "mongodb";
+
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
 import { leadStatuses, type LeadStatus } from "@/types/lead";
 
-
-
 interface LeadDocument {
   userId: string;
+  workspaceId: string | null;
   name: string;
   email: string;
   phone: string;
@@ -17,21 +17,43 @@ interface LeadDocument {
   createdAt: Date;
 }
 
+// Validate lead data
 function validateLead(body: unknown) {
-  if (!body || typeof body !== "object") return null;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
 
   const data = body as Record<string, unknown>;
 
-  const name = typeof data.name === "string" ? data.name.trim() : "";
+  const name =
+    typeof data.name === "string"
+      ? data.name.trim()
+      : "";
+
   const email =
     typeof data.email === "string"
       ? data.email.trim().toLowerCase()
       : "";
 
+  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+  const validStatus = leadStatuses.some(
+    (status) => status === data.status
+  );
+
+  if (!name || !validEmail || !validStatus) {
+    return null;
+  }
+
+  const rawWorkspaceId = data.workspaceId;
+
   if (
-    !name ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-    !leadStatuses.some((status) => status === data.status)
+    rawWorkspaceId !== undefined &&
+    rawWorkspaceId !== null &&
+    (
+      typeof rawWorkspaceId !== "string" ||
+      !ObjectId.isValid(rawWorkspaceId)
+    )
   ) {
     return null;
   }
@@ -39,14 +61,29 @@ function validateLead(body: unknown) {
   return {
     name,
     email,
-    phone: typeof data.phone === "string" ? data.phone.trim() : "",
+
+    phone:
+      typeof data.phone === "string"
+        ? data.phone.trim()
+        : "",
+
     company:
-      typeof data.company === "string" ? data.company.trim() : "",
+      typeof data.company === "string"
+        ? data.company.trim()
+        : "",
+
     status: data.status as LeadStatus,
+
     source:
-      typeof data.source === "string" && data.source.trim()
+      typeof data.source === "string" &&
+      data.source.trim()
         ? data.source.trim()
         : "Website",
+
+    workspaceId:
+      typeof rawWorkspaceId === "string"
+        ? rawWorkspaceId
+        : null,
   };
 }
 
@@ -64,24 +101,47 @@ export async function GET() {
 
     const db = await getDatabase();
 
-    const leads = await db
-      .collection<LeadDocument>("leads")
+    const collection = db.collection<LeadDocument>("leads");
+
+    // Temporary debug information
+    const totalLeads = await collection.countDocuments();
+
+    const myLeads = await collection.countDocuments({
+      userId: user.id,
+    });
+
+    console.log("========== LEAD DEBUG ==========");
+    console.log("Database:", db.databaseName);
+    console.log("Logged-in User ID:", user.id);
+    console.log("Total Database Leads:", totalLeads);
+    console.log("Current User Leads:", myLeads);
+    console.log("================================");
+
+    // Fetch only the logged-in user's leads
+    const leads = await collection
       .find({ userId: user.id })
-      .sort({ createdAt: -1, _id: -1 })
+      .sort({
+        createdAt: -1,
+        _id: -1,
+      })
       .toArray();
 
-    return NextResponse.json(
-      leads.map((lead) => ({
-        id: lead._id.toString(),
-        name: lead.name,
-        email: lead.email,
-        phone: lead.phone,
-        company: lead.company,
-        status: lead.status,
-        source: lead.source,
-        createdAt: lead.createdAt.toISOString().slice(0, 10),
-      }))
-    );
+    const formattedLeads = leads.map((lead) => ({
+      id: lead._id.toString(),
+      name: lead.name,
+      email: lead.email,
+      phone: lead.phone,
+      company: lead.company,
+      status: lead.status,
+      source: lead.source,
+      workspaceId: lead.workspaceId ?? null,
+
+      createdAt: new Date(lead.createdAt)
+        .toISOString()
+        .slice(0, 10),
+    }));
+
+    return NextResponse.json(formattedLeads);
   } catch (error) {
     console.error("GET leads error:", error);
 
@@ -105,22 +165,52 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json().catch(() => null);
+
     const payload = validateLead(body);
 
     if (!payload) {
       return NextResponse.json(
-        { message: "Valid name, email and status are required" },
+        {
+          message:
+            "Valid name, email, status and workspace ID are required",
+        },
         { status: 400 }
       );
     }
 
     const db = await getDatabase();
+
     const collection = db.collection<LeadDocument>("leads");
 
-    // One lead per email for each user
+    // Verify workspace ownership
+    if (payload.workspaceId) {
+      const workspace = await db
+        .collection("workspaces")
+        .findOne({
+          _id: new ObjectId(payload.workspaceId),
+          userId: user.id,
+        });
+
+      if (!workspace) {
+        return NextResponse.json(
+          {
+            message:
+              "Workspace not found or access denied",
+          },
+          { status: 404 }
+        );
+      }
+    }
+
+    // Prevent duplicate emails for the same user
     await collection.createIndex(
-      { userId: 1, email: 1 },
-      { unique: true }
+      {
+        userId: 1,
+        email: 1,
+      },
+      {
+        unique: true,
+      }
     );
 
     const newLead: LeadDocument = {
@@ -135,14 +225,22 @@ export async function POST(request: Request) {
       {
         id: result.insertedId.toString(),
         ...payload,
-        createdAt: newLead.createdAt.toISOString().slice(0, 10),
+        createdAt: newLead.createdAt
+          .toISOString()
+          .slice(0, 10),
       },
       { status: 201 }
     );
   } catch (error) {
-    if (error instanceof MongoServerError && error.code === 11000) {
+    if (
+      error instanceof MongoServerError &&
+      error.code === 11000
+    ) {
       return NextResponse.json(
-        { message: "A lead with this email already exists" },
+        {
+          message:
+            "A lead with this email already exists",
+        },
         { status: 409 }
       );
     }

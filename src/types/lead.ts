@@ -16,10 +16,17 @@ export interface Lead {
   company: string;
   status: LeadStatus;
   source: string;
+  workspaceId: string | null;
   createdAt: string;
 }
 
 export type LeadInput = Pick<
   Lead,
-  "name" | "email" | "phone" | "company" | "status" | "source"
+  | "name"
+  | "email"
+  | "phone"
+  | "company"
+  | "status"
+  | "source"
+  | "workspaceId"
 >;

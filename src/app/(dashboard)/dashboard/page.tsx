@@ -33,6 +33,7 @@ export default function DashboardPage() {
       <div>
         <RecentLeads/>
       </div>
+       
     </div>
   );
 }

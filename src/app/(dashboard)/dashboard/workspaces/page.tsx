@@ -1,7 +1,7 @@
 "use client";
-
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import Link from "next/link";
 import {
   Plus,
   Pencil,
@@ -11,13 +11,12 @@ import {
   FolderKanban,
   RefreshCw,
   CalendarDays,
+  ArrowRight,
 } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-
 import {
   Dialog,
   DialogContent,
@@ -26,7 +25,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,12 +35,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
 import type {
   Workspace,
   WorkspaceInput,
 } from "@/types/workspace";
-
 const COLORS = [
   "#0d9488",
   "#2563eb",
@@ -51,41 +47,32 @@ const COLORS = [
   "#db2777",
   "#059669",
 ];
-
 const emptyForm: WorkspaceInput = {
   name: "",
   description: "",
   color: COLORS[0],
 };
-
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
-
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-
   const [form, setForm] = useState<WorkspaceInput>(emptyForm);
-
   const loadWorkspaces = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
-
       const response = await fetch("/api/workspaces", {
         cache: "no-store",
       });
-
       const result = await response.json();
-
       if (!response.ok) {
         throw new Error(result.message || "Failed to load workspaces");
       }
-
       setWorkspaces(result);
     } catch (err) {
       setError(
@@ -95,17 +82,14 @@ export default function WorkspacesPage() {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => {
     void loadWorkspaces();
   }, [loadWorkspaces]);
-
   const openCreate = () => {
     setEditingId(null);
     setForm({ ...emptyForm });
     setDialogOpen(true);
   };
-
   const openEdit = (workspace: Workspace) => {
     setEditingId(workspace.id);
     setForm({
@@ -115,20 +99,16 @@ export default function WorkspacesPage() {
     });
     setDialogOpen(true);
   };
-
   const handleSave = async () => {
     if (!form.name.trim()) {
       toast.error("Workspace name is required");
       return;
     }
-
     try {
       setSaving(true);
-
       const url = editingId
         ? `/api/workspaces/${editingId}`
         : "/api/workspaces";
-
       const response = await fetch(url, {
         method: editingId ? "PATCH" : "POST",
         headers: {
@@ -136,23 +116,18 @@ export default function WorkspacesPage() {
         },
         body: JSON.stringify(form),
       });
-
       const result = await response.json();
-
       if (!response.ok) {
         throw new Error(result.message || "Failed to save workspace");
       }
-
       toast.success(
         editingId
           ? "Workspace updated successfully!"
           : "Workspace created successfully!"
       );
-
       setDialogOpen(false);
       setEditingId(null);
       setForm({ ...emptyForm });
-
       await loadWorkspaces();
     } catch (err) {
       toast.error(
@@ -162,26 +137,19 @@ export default function WorkspacesPage() {
       setSaving(false);
     }
   };
-
   const handleDelete = async () => {
     if (!deleteId) return;
-
     try {
       setDeleting(true);
-
       const response = await fetch(
         `/api/workspaces/${deleteId}`,
         { method: "DELETE" }
       );
-
       const result = await response.json();
-
       if (!response.ok) {
         throw new Error(result.message || "Failed to delete workspace");
       }
-
       toast.success("Workspace deleted successfully!");
-
       setDeleteId(null);
       await loadWorkspaces();
     } catch (err) {
@@ -192,10 +160,9 @@ export default function WorkspacesPage() {
       setDeleting(false);
     }
   };
-
   return (
     <div className="space-y-7">
-      {/* Header */}
+      
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">
@@ -205,7 +172,6 @@ export default function WorkspacesPage() {
             Organize your projects and manage workspaces.
           </p>
         </div>
-
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -217,7 +183,6 @@ export default function WorkspacesPage() {
               className={loading ? "animate-spin" : ""}
             />
           </Button>
-
           <Button
             onClick={openCreate}
             className="gap-2 bg-teal-600 hover:bg-teal-700"
@@ -227,8 +192,7 @@ export default function WorkspacesPage() {
           </Button>
         </div>
       </div>
-
-      {/* Stats */}
+     
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-4 w-fit rounded-xl bg-teal-50 p-3">
@@ -240,15 +204,13 @@ export default function WorkspacesPage() {
           </h3>
         </div>
       </div>
-
-      {/* Error */}
+     
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
-
-      {/* Loading */}
+     
       {loading ? (
         <div className="flex min-h-[300px] items-center justify-center">
           <Loader2
@@ -261,15 +223,12 @@ export default function WorkspacesPage() {
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-teal-50">
             <FolderKanban size={30} className="text-teal-600" />
           </div>
-
           <h3 className="text-xl font-bold text-slate-900">
             No Workspaces Yet
           </h3>
-
           <p className="mt-2 text-sm text-slate-500">
             Create your first workspace to organize your leads.
           </p>
-
           <Button
             onClick={openCreate}
             className="mt-6 bg-teal-600 hover:bg-teal-700"
@@ -289,7 +248,6 @@ export default function WorkspacesPage() {
                 className="h-2"
                 style={{ backgroundColor: workspace.color }}
               />
-
               <div className="p-6">
                 <div className="flex items-start justify-between">
                   <div
@@ -301,7 +259,6 @@ export default function WorkspacesPage() {
                   >
                     <FolderKanban size={24} />
                   </div>
-
                   <div className="flex gap-1">
                     <Button
                       size="icon"
@@ -310,7 +267,6 @@ export default function WorkspacesPage() {
                     >
                       <Pencil size={17} />
                     </Button>
-
                     <Button
                       size="icon"
                       variant="ghost"
@@ -321,39 +277,41 @@ export default function WorkspacesPage() {
                     </Button>
                   </div>
                 </div>
-
                 <h3 className="mt-5 text-lg font-bold text-slate-900">
                   {workspace.name}
                 </h3>
-
                 <p className="mt-2 min-h-[44px] text-sm leading-relaxed text-slate-500">
                   {workspace.description || "No description provided."}
                 </p>
-
                 <div className="mt-5 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-400">
                   <CalendarDays size={14} />
                   Created{" "}
                   {new Date(workspace.createdAt).toLocaleDateString()}
                 </div>
+                {/* Open workspace and manage its leads */}
+                <Link
+                  href={`/dashboard/workspaces/${workspace.id}`}
+                  className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-teal-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-700"
+                >
+                  Open Workspace
+                  <ArrowRight size={16} />
+                </Link>
               </div>
             </div>
           ))}
         </div>
       )}
-
-      {/* Create / Edit Dialog */}
+      
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {editingId ? "Edit Workspace" : "Create Workspace"}
             </DialogTitle>
-
             <DialogDescription>
               Add a name, description and color for your workspace.
             </DialogDescription>
           </DialogHeader>
-
           <div className="space-y-5 py-3">
             <div className="space-y-2">
               <Label>Workspace Name</Label>
@@ -369,7 +327,6 @@ export default function WorkspacesPage() {
                 placeholder="e.g. Sales Team"
               />
             </div>
-
             <div className="space-y-2">
               <Label>Description</Label>
               <Textarea
@@ -385,10 +342,8 @@ export default function WorkspacesPage() {
                 rows={4}
               />
             </div>
-
             <div className="space-y-3">
               <Label>Workspace Color</Label>
-
               <div className="flex flex-wrap gap-3">
                 {COLORS.map((color) => (
                   <button
@@ -407,7 +362,6 @@ export default function WorkspacesPage() {
               </div>
             </div>
           </div>
-
           <DialogFooter>
             <Button
               variant="outline"
@@ -416,7 +370,6 @@ export default function WorkspacesPage() {
             >
               Cancel
             </Button>
-
             <Button
               onClick={handleSave}
               disabled={saving || !form.name.trim()}
@@ -425,14 +378,12 @@ export default function WorkspacesPage() {
               {saving && (
                 <Loader2 size={16} className="mr-2 animate-spin" />
               )}
-
               {editingId ? "Save Changes" : "Create Workspace"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Delete Confirmation */}
+     
       <AlertDialog
         open={Boolean(deleteId)}
         onOpenChange={(open) => {
@@ -444,18 +395,15 @@ export default function WorkspacesPage() {
             <AlertDialogTitle>
               Delete Workspace?
             </AlertDialogTitle>
-
             <AlertDialogDescription>
               This will permanently delete the selected workspace.
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>
               Cancel
             </AlertDialogCancel>
-
             <AlertDialogAction
               onClick={(event) => {
                 event.preventDefault();
