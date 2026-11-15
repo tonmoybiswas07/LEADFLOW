@@ -345,7 +345,9 @@ export default function WorkspaceDetailsPage({ params }: PageProps) {
 
         <Select
           value={statusFilter}
-          onValueChange={setStatusFilter}
+          onValueChange={(val) => {
+            if (val) setStatusFilter(val);
+          }}
         >
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="Filter status" />

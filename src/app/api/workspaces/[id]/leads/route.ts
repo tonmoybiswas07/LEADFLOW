@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 import { leadStatuses, type LeadStatus } from "@/types/lead";
 
 type Context = {
@@ -22,19 +24,6 @@ interface LeadDocument {
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-async function authorizeWorkspace(id: string, userId: string) {
-  if (!ObjectId.isValid(id)) return null;
-
-  const db = await getDatabase();
-
-  const workspace = await db.collection("workspaces").findOne({
-    _id: new ObjectId(id),
-    userId,
-  });
-
-  return workspace ? db : null;
-}
-
 export async function GET(_request: Request, context: Context) {
   try {
     const user = await getCurrentUser();
@@ -47,19 +36,35 @@ export async function GET(_request: Request, context: Context) {
     }
 
     const { id } = await context.params;
-    const db = await authorizeWorkspace(id, user.id);
 
-    if (!db) {
+    if (!ObjectId.isValid(id)) {
+      return NextResponse.json(
+        { message: "Invalid workspace ID" },
+        { status: 400 }
+      );
+    }
+
+    const access = await getWorkspaceAccess(id);
+
+    if (!access) {
       return NextResponse.json(
         { message: "Workspace not found" },
         { status: 404 }
       );
     }
 
+    if (!hasPermission(access.role, "leads:read")) {
+      return NextResponse.json(
+        { message: "Access denied" },
+        { status: 403 }
+      );
+    }
+
+    const db = await getDatabase();
+
     const leads = await db
       .collection<LeadDocument>("leads")
       .find({
-        userId: user.id,
         workspaceId: id,
       })
       .sort({ createdAt: -1 })
@@ -102,12 +107,27 @@ export async function POST(request: Request, context: Context) {
     }
 
     const { id } = await context.params;
-    const db = await authorizeWorkspace(id, user.id);
 
-    if (!db) {
+    if (!ObjectId.isValid(id)) {
+      return NextResponse.json(
+        { message: "Invalid workspace ID" },
+        { status: 400 }
+      );
+    }
+
+    const access = await getWorkspaceAccess(id);
+
+    if (!access) {
       return NextResponse.json(
         { message: "Workspace not found" },
         { status: 404 }
+      );
+    }
+
+    if (!hasPermission(access.role, "leads:create")) {
+      return NextResponse.json(
+        { message: "You do not have permission to create leads in this workspace" },
+        { status: 403 }
       );
     }
 
@@ -150,12 +170,11 @@ export async function POST(request: Request, context: Context) {
       );
     }
 
+    const db = await getDatabase();
     const collection = db.collection<LeadDocument>("leads");
 
-    // Existing unique index: { userId: 1, email: 1 }
-    // Email remains unique across the user's workspaces.
     const existing = await collection.findOne({
-      userId: user.id,
+      userId: access.workspace.userId,
       email,
     });
 
@@ -169,7 +188,7 @@ export async function POST(request: Request, context: Context) {
     const now = new Date();
 
     const lead: LeadDocument = {
-      userId: user.id,
+      userId: access.workspace.userId,
       workspaceId: id,
       name,
       email,

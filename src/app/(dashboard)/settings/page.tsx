@@ -47,7 +47,7 @@ export default function SettingsPage() {
       setName(user.name || "");
       setImage(user.image || "");
     }
-  }, [user?.id, user?.name, user?.image]);
+  }, [user]);
 
   const hasChanges =
     name.trim() !== (user?.name || "") ||
@@ -160,6 +160,7 @@ export default function SettingsPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div className="relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-4 border-white bg-teal-100 text-2xl font-bold text-teal-700 shadow-sm">
               {user.image ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
                 <img
                   src={user.image}
                   alt={user.name}
@@ -295,6 +296,7 @@ export default function SettingsPage() {
             {image.trim() && (
               <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-teal-100 text-teal-700">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={image.trim()}
                     alt="Profile preview"

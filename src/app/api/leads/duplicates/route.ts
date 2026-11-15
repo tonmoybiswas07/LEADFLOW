@@ -1,10 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { ObjectId, type Filter } from "mongodb";
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 import type { LeadStatus } from "@/types/lead";
 
 interface LeadDocument {
   userId: string;
+  workspaceId?: string | null;
   name: string;
   email: string;
   phone: string;
@@ -14,7 +18,18 @@ interface LeadDocument {
   createdAt: Date;
 }
 
-export async function GET() {
+interface WorkspaceDocument {
+  userId: string;
+}
+
+interface WorkspaceMemberDocument {
+  workspaceId: string;
+  userId: string | null;
+  role: "Owner" | "Admin" | "Member";
+  status: "Pending" | "Active";
+}
+
+export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
 
@@ -25,11 +40,72 @@ export async function GET() {
       );
     }
 
+    const { searchParams } = request.nextUrl;
+    const workspaceId = searchParams.get("workspaceId") || "all";
+
     const db = await getDatabase();
+    let filter: Filter<LeadDocument>;
+
+    if (workspaceId === "unassigned" || workspaceId === "personal") {
+      filter = {
+        userId: user.id,
+        $or: [
+          { workspaceId: null },
+          { workspaceId: { $exists: false } },
+        ],
+      };
+    } else if (ObjectId.isValid(workspaceId)) {
+      const access = await getWorkspaceAccess(workspaceId);
+      if (!access || !hasPermission(access.role, "leads:read")) {
+        return NextResponse.json(
+          { message: "Access denied to workspace" },
+          { status: 403 }
+        );
+      }
+      filter = { workspaceId };
+    } else {
+      // "all" - find all accessible workspaces
+      const ownedWorkspaces = await db
+        .collection<WorkspaceDocument>("workspaces")
+        .find({ userId: user.id })
+        .project({ _id: 1 })
+        .toArray();
+
+      const ownedIds = ownedWorkspaces.map((w) => w._id.toString());
+
+      const memberships = await db
+        .collection<WorkspaceMemberDocument>("workspaceMembers")
+        .find({
+          userId: user.id,
+          status: "Active",
+          role: { $in: ["Admin", "Member"] },
+        })
+        .toArray();
+
+      const memberIds = memberships.map((m) => m.workspaceId);
+      const accessibleWorkspaceIds = [
+        ...new Set([...ownedIds, ...memberIds]),
+      ];
+
+      filter = {
+        $or: [
+          {
+            userId: user.id,
+            $or: [
+              { workspaceId: null },
+              { workspaceId: { $exists: false } },
+            ],
+          },
+          {
+            workspaceId: { $in: accessibleWorkspaceIds },
+          },
+        ],
+      };
+    }
 
     const leads = await db
       .collection<LeadDocument>("leads")
-      .find({ userId: user.id })
+      .find(filter)
       .sort({ createdAt: 1, _id: 1 })
       .toArray();
 
@@ -39,8 +115,6 @@ export async function GET() {
     for (const lead of leads) {
       const id = lead._id.toString();
       const email = (lead.email || "").trim().toLowerCase();
-
-      // Remove formatting characters from phone numbers
       const phone = (lead.phone || "").replace(/[^\d+]/g, "");
 
       if (email) {
@@ -62,6 +136,7 @@ export async function GET() {
         phone: string;
         company: string;
         status: LeadStatus;
+        workspaceId: string | null;
         createdAt: string;
       }[];
     }[] = [];
@@ -87,6 +162,7 @@ export async function GET() {
               phone: lead.phone,
               company: lead.company,
               status: lead.status,
+              workspaceId: lead.workspaceId ?? null,
               createdAt: new Date(lead.createdAt)
                 .toISOString()
                 .slice(0, 10),
@@ -106,10 +182,10 @@ export async function GET() {
       groups,
     });
   } catch (error) {
-    console.error("Duplicate detection error:", error);
+    console.error("GET duplicate leads error:", error);
 
     return NextResponse.json(
-      { message: "Failed to detect duplicate leads" },
+      { message: "Failed to detect duplicate leads." },
       { status: 500 }
     );
   }

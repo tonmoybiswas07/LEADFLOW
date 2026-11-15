@@ -59,7 +59,9 @@ export default function AnalyticsFilters({
         ) : (
           <Select
             value={workspaceId}
-            onValueChange={onWorkspaceChange}
+            onValueChange={(val) => {
+              if (val) onWorkspaceChange(val);
+            }}
           >
             <SelectTrigger className="w-full min-w-44 border-0 shadow-none focus-visible:ring-0">
               <SelectValue placeholder="All Workspaces" />
@@ -95,9 +97,9 @@ export default function AnalyticsFilters({
 
         <Select
           value={range}
-          onValueChange={(value) =>
-            onRangeChange(value as AnalyticsRange)
-          }
+          onValueChange={(value) => {
+            if (value) onRangeChange(value as AnalyticsRange);
+          }}
         >
           <SelectTrigger className="w-full min-w-40 border-0 shadow-none focus-visible:ring-0">
             <SelectValue />

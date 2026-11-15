@@ -470,7 +470,9 @@ export default function TeamManagementPage() {
 
             <Select
               value={workspaceId}
-              onValueChange={setWorkspaceId}
+              onValueChange={(val) => {
+                if (val) setWorkspaceId(val);
+              }}
             >
               <SelectTrigger className="w-full sm:w-72">
                 <SelectValue placeholder="Select workspace" />

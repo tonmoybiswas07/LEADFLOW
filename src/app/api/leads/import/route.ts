@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoServerError } from "mongodb";
+import { MongoServerError, ObjectId } from "mongodb";
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 import { leadStatuses, type LeadStatus } from "@/types/lead";
 
 interface ImportLead {
@@ -15,6 +17,7 @@ interface ImportLead {
 
 interface LeadDocument extends ImportLead {
   userId: string;
+  workspaceId: string | null;
   createdAt: Date;
 }
 
@@ -34,6 +37,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => null);
     const incoming = body?.leads;
+    const requestedWorkspaceId = typeof body?.workspaceId === "string" ? body.workspaceId.trim() : null;
 
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return NextResponse.json(
@@ -47,6 +51,36 @@ export async function POST(request: NextRequest) {
         { message: "Maximum 1000 leads per import." },
         { status: 400 }
       );
+    }
+
+    let targetWorkspaceId: string | null = null;
+    let targetOwnerId = user.id;
+
+    if (requestedWorkspaceId && requestedWorkspaceId !== "personal" && requestedWorkspaceId !== "unassigned") {
+      if (!ObjectId.isValid(requestedWorkspaceId)) {
+        return NextResponse.json(
+          { message: "Invalid workspace ID provided." },
+          { status: 400 }
+        );
+      }
+
+      const access = await getWorkspaceAccess(requestedWorkspaceId);
+      if (!access) {
+        return NextResponse.json(
+          { message: "Workspace not found or access denied." },
+          { status: 404 }
+        );
+      }
+
+      if (!hasPermission(access.role, "leads:create")) {
+        return NextResponse.json(
+          { message: "You do not have permission to import leads to this workspace." },
+          { status: 403 }
+        );
+      }
+
+      targetWorkspaceId = requestedWorkspaceId;
+      targetOwnerId = access.workspace.userId;
     }
 
     const valid: ImportLead[] = [];
@@ -110,15 +144,18 @@ export async function POST(request: NextRequest) {
     const db = await getDatabase();
     const collection = db.collection<LeadDocument>("leads");
 
-    await collection.createIndex(
-      { userId: 1, email: 1 },
-      { unique: true }
-    );
-
     const existing = await collection
       .find(
         {
-          userId: user.id,
+          userId: targetOwnerId,
+          ...(targetWorkspaceId
+            ? { workspaceId: targetWorkspaceId }
+            : {
+                $or: [
+                  { workspaceId: null },
+                  { workspaceId: { $exists: false } },
+                ],
+              }),
           email: { $in: valid.map((lead) => lead.email) },
         },
         { projection: { email: 1 } }
@@ -143,13 +180,17 @@ export async function POST(request: NextRequest) {
       const operations = newLeads.map((lead) => ({
         updateOne: {
           filter: {
-            userId: user.id,
+            userId: targetOwnerId,
+            ...(targetWorkspaceId
+              ? { workspaceId: targetWorkspaceId }
+              : { workspaceId: null }),
             email: lead.email,
           },
           update: {
             $setOnInsert: {
               ...lead,
-              userId: user.id,
+              userId: targetOwnerId,
+              workspaceId: targetWorkspaceId,
               createdAt: now,
             },
           },
@@ -157,7 +198,6 @@ export async function POST(request: NextRequest) {
         },
       }));
 
-      // Upserts avoid overwriting existing leads.
       const result = await collection.bulkWrite(operations, {
         ordered: false,
       });
@@ -173,6 +213,7 @@ export async function POST(request: NextRequest) {
       duplicates: duplicateCount,
       invalid: invalidRows.length,
       invalidRows,
+      workspaceId: targetWorkspaceId,
     });
   } catch (error) {
     console.error("Import leads error:", error);

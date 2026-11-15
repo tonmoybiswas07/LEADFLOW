@@ -508,7 +508,9 @@ export default function AnalyticsPage() {
             ) : (
               <Select
                 value={workspaceId}
-                onValueChange={handleWorkspaceChange}
+                onValueChange={(val) => {
+                  if (val) handleWorkspaceChange(val);
+                }}
               >
                 <SelectTrigger className="w-full min-w-44 bg-slate-50 sm:w-52">
                   <SelectValue placeholder="Select Workspace" />

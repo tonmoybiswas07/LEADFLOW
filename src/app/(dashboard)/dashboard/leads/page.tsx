@@ -85,6 +85,7 @@ const emptyForm: LeadInput = {
   company: "",
   status: "New",
   source: "Website",
+  workspaceId: null,
 };
 
 const statusStyles: Record<LeadStatus, string> = {
@@ -315,6 +316,7 @@ export default function AllLeadsPage() {
       company: lead.company,
       status: lead.status,
       source: lead.source,
+      workspaceId: lead.workspaceId,
     });
 
     setModalOpen(true);
@@ -546,7 +548,9 @@ export default function AllLeadsPage() {
 
         <Select
           value={selectedWorkspaceId ?? ""}
-          onValueChange={changeScope}
+          onValueChange={(val) => {
+            if (val) changeScope(val);
+          }}
           disabled={!scopeReady}
         >
           <SelectTrigger className="w-full bg-white sm:w-60">
@@ -612,8 +616,10 @@ export default function AllLeadsPage() {
         <Select
           value={statusFilter}
           onValueChange={(value) => {
-            setStatusFilter(value);
-            setPage(1);
+            if (value) {
+              setStatusFilter(value);
+              setPage(1);
+            }
           }}
         >
           <SelectTrigger className="w-full sm:w-48">
@@ -917,12 +923,14 @@ export default function AllLeadsPage() {
 
                 <Select
                   value={form.status}
-                  onValueChange={(value) =>
-                    setForm({
-                      ...form,
-                      status: value as LeadStatus,
-                    })
-                  }
+                  onValueChange={(value) => {
+                    if (value) {
+                      setForm({
+                        ...form,
+                        status: value as LeadStatus,
+                      });
+                    }
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -946,12 +954,14 @@ export default function AllLeadsPage() {
 
                 <Select
                   value={form.source}
-                  onValueChange={(value) =>
-                    setForm({
-                      ...form,
-                      source: value,
-                    })
-                  }
+                  onValueChange={(value) => {
+                    if (value) {
+                      setForm({
+                        ...form,
+                        source: value,
+                      });
+                    }
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />

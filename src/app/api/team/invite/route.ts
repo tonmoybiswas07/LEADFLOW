@@ -87,7 +87,10 @@ export async function POST(request: Request) {
 
     // Prevent inviting the workspace creator.
     const owner = await db.collection("user").findOne({
-      id: access.workspace.userId,
+      $or: [
+        { id: access.workspace.userId },
+        { _id: access.workspace.userId } as Record<string, unknown>,
+      ],
     });
 
     if (
