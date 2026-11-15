@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   BarChart3,
   Loader2,
@@ -9,6 +9,7 @@ import {
   Trophy,
   TrendingUp,
   Users,
+  RefreshCw,
 } from "lucide-react";
 
 import {
@@ -23,6 +24,8 @@ import {
   Cell,
 } from "recharts";
 
+import { Button } from "@/components/ui/button";
+
 interface WorkspaceStats {
   workspaceId: string;
   name: string;
@@ -32,6 +35,8 @@ interface WorkspaceStats {
   activeLeads: number;
   lostLeads: number;
   conversionRate: number;
+  role?: "Owner" | "Admin" | "Member";
+  isShared?: boolean;
 }
 
 interface ComparisonResponse {
@@ -43,19 +48,17 @@ interface Props {
   range: "7d" | "30d" | "90d" | "12m" | "all";
 }
 
-export default function WorkspaceComparison({
-  range,
-}: Props) {
-  const [data, setData] =
-    useState<ComparisonResponse | null>(null);
+export default function WorkspaceComparison({ range }: Props) {
+  const [data, setData] = useState<ComparisonResponse | null>(
+    null
+  );
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function fetchComparison() {
+  const fetchComparison = useCallback(
+    async (signal?: AbortSignal) => {
       try {
         setLoading(true);
         setError("");
@@ -66,7 +69,7 @@ export default function WorkspaceComparison({
           `/api/analytics/comparison?${params.toString()}`,
           {
             cache: "no-store",
-            signal: controller.signal,
+            signal,
           }
         );
 
@@ -77,37 +80,62 @@ export default function WorkspaceComparison({
 
           throw new Error(
             result?.message ||
-              "Failed to load comparison"
+              "Failed to load workspace comparison"
           );
         }
 
         const result: ComparisonResponse =
           await response.json();
 
-        if (!controller.signal.aborted) {
+        if (!signal?.aborted) {
           setData(result);
         }
       } catch (err) {
-        if (controller.signal.aborted) return;
+        if (signal?.aborted) return;
 
         setError(
           err instanceof Error
             ? err.message
             : "Something went wrong"
         );
+
+        setData(null);
       } finally {
-        if (!controller.signal.aborted) {
+        if (!signal?.aborted) {
           setLoading(false);
         }
       }
-    }
+    },
+    [range]
+  );
 
-    void fetchComparison();
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void fetchComparison(controller.signal);
 
     return () => controller.abort();
-  }, [range]);
+  }, [fetchComparison, refreshKey]);
 
-  if (loading) {
+  useEffect(() => {
+    const handleWorkspaceChanged = () => {
+      setRefreshKey((previous) => previous + 1);
+    };
+
+    window.addEventListener(
+      "workspace-changed",
+      handleWorkspaceChanged
+    );
+
+    return () => {
+      window.removeEventListener(
+        "workspace-changed",
+        handleWorkspaceChanged
+      );
+    };
+  }, []);
+
+  if (loading && !data) {
     return (
       <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white">
         <div className="flex items-center gap-3 text-slate-500">
@@ -121,11 +149,21 @@ export default function WorkspaceComparison({
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
-      <div className="flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 p-5 text-red-600">
-        <AlertCircle size={20} />
-        {error}
+      <div className="space-y-4 rounded-2xl border border-red-200 bg-red-50 p-5">
+        <div className="flex items-center gap-3 text-red-600">
+          <AlertCircle size={20} />
+          <p>{error}</p>
+        </div>
+
+        <Button
+          variant="outline"
+          onClick={() => setRefreshKey((key) => key + 1)}
+        >
+          <RefreshCw size={16} className="mr-2" />
+          Try Again
+        </Button>
       </div>
     );
   }
@@ -161,7 +199,7 @@ export default function WorkspaceComparison({
   return (
     <section className="space-y-6">
       {/* Header */}
-      <div>
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-teal-50 p-3 text-teal-600">
             <BarChart3 size={23} />
@@ -174,11 +212,31 @@ export default function WorkspaceComparison({
 
             <p className="mt-1 text-sm text-slate-500">
               Compare lead performance across your
-              workspaces.
+              accessible workspaces.
             </p>
           </div>
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={loading}
+          onClick={() => setRefreshKey((key) => key + 1)}
+          className="gap-2"
+        >
+          <RefreshCw
+            size={16}
+            className={loading ? "animate-spin" : ""}
+          />
+          Refresh
+        </Button>
       </div>
+
+      {error && (
+        <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">
+          {error}
+        </p>
+      )}
 
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -216,10 +274,7 @@ export default function WorkspaceComparison({
             <p className="text-sm text-slate-500">
               Best Conversion Rate
             </p>
-            <Trophy
-              className="text-amber-500"
-              size={20}
-            />
+            <Trophy className="text-amber-500" size={20} />
           </div>
 
           <h3 className="mt-3 truncate text-xl font-bold text-slate-900">
@@ -246,10 +301,7 @@ export default function WorkspaceComparison({
 
         {totalLeads > 0 ? (
           <div className="mt-6 h-[350px] w-full">
-            <ResponsiveContainer
-              width="100%"
-              height="100%"
-            >
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={comparison}
                 margin={{
@@ -274,7 +326,6 @@ export default function WorkspaceComparison({
                 />
 
                 <YAxis allowDecimals={false} />
-
                 <Tooltip />
                 <Legend />
 
@@ -287,7 +338,7 @@ export default function WorkspaceComparison({
                   {comparison.map((item) => (
                     <Cell
                       key={item.workspaceId}
-                      fill={item.color}
+                      fill={item.color || "#0d9488"}
                     />
                   ))}
                 </Bar>
@@ -357,13 +408,23 @@ export default function WorkspaceComparison({
                       <span
                         className="h-3 w-3 shrink-0 rounded-full"
                         style={{
-                          backgroundColor: item.color,
+                          backgroundColor:
+                            item.color || "#0d9488",
                         }}
                       />
 
-                      <span className="font-semibold text-slate-900">
-                        {item.name}
-                      </span>
+                      <div>
+                        <p className="font-semibold text-slate-900">
+                          {item.name}
+                        </p>
+
+                        {item.role && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            {item.role}
+                            {item.isShared ? " · Shared" : ""}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </td>
 
@@ -390,6 +451,17 @@ export default function WorkspaceComparison({
                   </td>
                 </tr>
               ))}
+
+              {comparison.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-5 py-12 text-center text-slate-500"
+                  >
+                    No workspace data available.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

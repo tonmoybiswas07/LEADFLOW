@@ -1,6 +1,13 @@
+
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   Plus,
   Search,
@@ -14,13 +21,13 @@ import {
   Phone,
   Loader2,
   RefreshCw,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
 import {
   Dialog,
   DialogContent,
@@ -29,7 +36,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,7 +46,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
 import {
   Select,
   SelectContent,
@@ -56,6 +61,21 @@ import {
   type LeadStatus,
 } from "@/types/lead";
 
+type WorkspaceRole = "Owner" | "Admin" | "Member";
+
+interface Workspace {
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+  isShared: boolean;
+}
+
+type WorkspaceLead = Lead & {
+  workspaceId?: string | null;
+};
+
+const STORAGE_KEY = "leadflow-active-workspace";
+const PERSONAL = "personal";
 const PAGE_SIZE = 5;
 
 const emptyForm: LeadInput = {
@@ -94,7 +114,13 @@ async function readResponse(response: Response) {
 }
 
 export default function AllLeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const [leads, setLeads] = useState<WorkspaceLead[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+
+  const [selectedWorkspaceId, setSelectedWorkspaceId] =
+    useState<string | null>(null);
+
+  const [scopeReady, setScopeReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -111,7 +137,71 @@ export default function AllLeadsPage() {
 
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Fetch leads from MongoDB API
+  // Load available workspaces and selected workspace
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const response = await fetch("/api/workspaces", {
+        cache: "no-store",
+      });
+
+      const data = await readResponse(response);
+
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid workspace response");
+      }
+
+      const list = data as Workspace[];
+      setWorkspaces(list);
+
+      const savedId = localStorage.getItem(STORAGE_KEY);
+
+      const validWorkspace = list.find(
+        (workspace) => workspace.id === savedId
+      );
+
+      setSelectedWorkspaceId(
+        validWorkspace?.id ?? list[0]?.id ?? PERSONAL
+      );
+    } catch (err) {
+      setWorkspaces([]);
+      setSelectedWorkspaceId(null);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load workspaces"
+      );
+    } finally {
+      setScopeReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadWorkspaces();
+
+    const handleWorkspaceChange = () => {
+      setPage(1);
+      setSearch("");
+      setStatusFilter("all");
+      setModalOpen(false);
+      setDeleteId(null);
+
+      void loadWorkspaces();
+    };
+
+    window.addEventListener(
+      "workspace-changed",
+      handleWorkspaceChange
+    );
+
+    return () => {
+      window.removeEventListener(
+        "workspace-changed",
+        handleWorkspaceChange
+      );
+    };
+  }, [loadWorkspaces]);
+
+  // Fetch accessible leads
   useEffect(() => {
     const controller = new AbortController();
 
@@ -132,10 +222,11 @@ export default function AllLeadsPage() {
         }
       } catch (err) {
         if (!controller.signal.aborted) {
-          const message =
-            err instanceof Error ? err.message : "Failed to load leads";
-
-          setError(message);
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load leads"
+          );
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -144,29 +235,55 @@ export default function AllLeadsPage() {
       }
     }
 
-    fetchLeads();
+    void fetchLeads();
 
     return () => controller.abort();
-  }, [refreshKey]);
+  }, [refreshKey, selectedWorkspaceId]);
 
-  // Search + filter
+  const activeWorkspace = workspaces.find(
+    (workspace) => workspace.id === selectedWorkspaceId
+  );
+
+  const isPersonal = selectedWorkspaceId === PERSONAL;
+
+  const canDelete =
+    isPersonal ||
+    activeWorkspace?.role === "Owner" ||
+    activeWorkspace?.role === "Admin";
+
+  // Filter leads by workspace
+  const workspaceLeads = useMemo(() => {
+    if (!scopeReady || !selectedWorkspaceId) return [];
+
+    return leads.filter((lead) => {
+      if (isPersonal) {
+        return !lead.workspaceId;
+      }
+
+      return lead.workspaceId === selectedWorkspaceId;
+    });
+  }, [leads, selectedWorkspaceId, isPersonal, scopeReady]);
+
   const filteredLeads = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
-    return leads.filter((lead) => {
+    return workspaceLeads.filter((lead) => {
       const matchesSearch = [
         lead.name,
         lead.email,
         lead.company,
         lead.phone,
-      ].some((value) => value.toLowerCase().includes(keyword));
+      ].some((value) =>
+        (value ?? "").toLowerCase().includes(keyword)
+      );
 
       const matchesStatus =
-        statusFilter === "all" || lead.status === statusFilter;
+        statusFilter === "all" ||
+        lead.status === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
-  }, [leads, search, statusFilter]);
+  }, [workspaceLeads, search, statusFilter]);
 
   const totalPages = Math.max(
     1,
@@ -180,15 +297,15 @@ export default function AllLeadsPage() {
     currentPage * PAGE_SIZE
   );
 
-  // Add modal
   const openAddModal = () => {
+    if (!selectedWorkspaceId) return;
+
     setEditingId(null);
     setForm({ ...emptyForm });
     setModalOpen(true);
   };
 
-  // Edit modal
-  const openEditModal = (lead: Lead) => {
+  const openEditModal = (lead: WorkspaceLead) => {
     setEditingId(lead.id);
 
     setForm({
@@ -203,72 +320,81 @@ export default function AllLeadsPage() {
     setModalOpen(true);
   };
 
-  // Create / Update lead
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (
+    event: FormEvent<HTMLFormElement>
+  ) => {
     event.preventDefault();
 
-    if (saving) return;
+    if (saving || !selectedWorkspaceId) return;
 
     try {
       setSaving(true);
 
       const isEditing = Boolean(editingId);
+
       const url = isEditing
         ? `/api/leads/${editingId}`
         : "/api/leads";
+
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        phone: form.phone.trim(),
+        company: form.company.trim(),
+      };
 
       const response = await fetch(url, {
         method: isEditing ? "PATCH" : "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          ...form,
-          name: form.name.trim(),
-          email: form.email.trim().toLowerCase(),
-          phone: form.phone.trim(),
-          company: form.company.trim(),
-        }),
+        body: JSON.stringify(
+          isEditing
+            ? payload
+            : {
+                ...payload,
+                workspaceId: isPersonal
+                  ? null
+                  : selectedWorkspaceId,
+              }
+        ),
       });
 
-      const savedLead: Lead = await readResponse(response);
+      await readResponse(response);
 
-      if (isEditing) {
-        setLeads((previous) =>
-          previous.map((lead) =>
-            lead.id === editingId ? savedLead : lead
-          )
-        );
+      toast.success(
+        isEditing
+          ? "Lead updated successfully!"
+          : "New lead added successfully!"
+      );
 
-        toast.success("Lead updated successfully!");
-      } else {
-        setLeads((previous) => [savedLead, ...previous]);
-        toast.success("New lead added successfully!");
-      }
-
-      setPage(1);
       setModalOpen(false);
       setEditingId(null);
       setForm({ ...emptyForm });
+      setPage(1);
+      setRefreshKey((key) => key + 1);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save lead"
+        err instanceof Error
+          ? err.message
+          : "Failed to save lead"
       );
     } finally {
       setSaving(false);
     }
   };
 
-  // Delete lead
   const handleDelete = async () => {
-    if (!deleteId || deleting) return;
+    if (!deleteId || deleting || !canDelete) return;
 
     try {
       setDeleting(true);
 
-      const response = await fetch(`/api/leads/${deleteId}`, {
-        method: "DELETE",
-      });
+      const response = await fetch(
+        `/api/leads/${deleteId}`,
+        { method: "DELETE" }
+      );
 
       await readResponse(response);
 
@@ -280,7 +406,9 @@ export default function AllLeadsPage() {
       setDeleteId(null);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to delete lead"
+        err instanceof Error
+          ? err.message
+          : "Failed to delete lead"
       );
     } finally {
       setDeleting(false);
@@ -290,25 +418,56 @@ export default function AllLeadsPage() {
   const stats = [
     {
       title: "Total Leads",
-      value: leads.length,
+      value: workspaceLeads.length,
       color: "text-slate-900",
     },
     {
       title: "New Leads",
-      value: leads.filter((lead) => lead.status === "New").length,
+      value: workspaceLeads.filter(
+        (lead) => lead.status === "New"
+      ).length,
       color: "text-teal-600",
     },
     {
       title: "Qualified",
-      value: leads.filter((lead) => lead.status === "Qualified").length,
+      value: workspaceLeads.filter(
+        (lead) => lead.status === "Qualified"
+      ).length,
       color: "text-violet-600",
     },
     {
       title: "Converted",
-      value: leads.filter((lead) => lead.status === "Converted").length,
+      value: workspaceLeads.filter(
+        (lead) => lead.status === "Converted"
+      ).length,
       color: "text-emerald-600",
     },
   ];
+
+  const changeScope = (value: string) => {
+    if (value === PERSONAL) {
+      setSelectedWorkspaceId(PERSONAL);
+    } else {
+      const workspace = workspaces.find(
+        (item) => item.id === value
+      );
+
+      if (!workspace) return;
+
+      setSelectedWorkspaceId(workspace.id);
+      localStorage.setItem(STORAGE_KEY, workspace.id);
+
+      window.dispatchEvent(
+        new CustomEvent("workspace-changed", {
+          detail: { workspaceId: workspace.id },
+        })
+      );
+    }
+
+    setPage(1);
+    setSearch("");
+    setStatusFilter("all");
+  };
 
   return (
     <div className="space-y-6">
@@ -332,7 +491,9 @@ export default function AllLeadsPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => setRefreshKey((key) => key + 1)}
+            onClick={() =>
+              setRefreshKey((key) => key + 1)
+            }
             disabled={loading}
             aria-label="Refresh leads"
           >
@@ -344,12 +505,69 @@ export default function AllLeadsPage() {
 
           <Button
             onClick={openAddModal}
+            disabled={!scopeReady || !selectedWorkspaceId}
             className="rounded-xl bg-teal-600 hover:bg-teal-700"
           >
             <Plus size={18} className="mr-2" />
             Add New Lead
           </Button>
         </div>
+      </div>
+
+      {/* Selected Workspace */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-teal-100 bg-teal-50/50 p-4">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-teal-100 p-3 text-teal-700">
+            <Building2 size={22} />
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-slate-500">
+              Current Lead Scope
+            </p>
+
+            <h3 className="font-semibold text-slate-900">
+              {isPersonal
+                ? "Personal Leads"
+                : activeWorkspace?.name ?? "Select Workspace"}
+            </h3>
+
+            <p className="text-xs text-teal-700">
+              {isPersonal
+                ? "Private leads"
+                : activeWorkspace
+                  ? `${activeWorkspace.role} ${
+                      activeWorkspace.isShared ? "· Shared" : ""
+                    }`
+                  : "No workspace selected"}
+            </p>
+          </div>
+        </div>
+
+        <Select
+          value={selectedWorkspaceId ?? ""}
+          onValueChange={changeScope}
+          disabled={!scopeReady}
+        >
+          <SelectTrigger className="w-full bg-white sm:w-60">
+            <SelectValue placeholder="Select workspace" />
+          </SelectTrigger>
+
+          <SelectContent>
+            <SelectItem value={PERSONAL}>
+              Personal Leads
+            </SelectItem>
+
+            {workspaces.map((workspace) => (
+              <SelectItem
+                key={workspace.id}
+                value={workspace.id}
+              >
+                {workspace.name} ({workspace.role})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Statistics */}
@@ -359,16 +577,20 @@ export default function AllLeadsPage() {
             key={stat.title}
             className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
           >
-            <p className="text-sm text-slate-500">{stat.title}</p>
+            <p className="text-sm text-slate-500">
+              {stat.title}
+            </p>
 
-            <h2 className={`mt-2 text-3xl font-bold ${stat.color}`}>
-              {loading ? "..." : stat.value}
+            <h2
+              className={`mt-2 text-3xl font-bold ${stat.color}`}
+            >
+              {loading || !scopeReady ? "..." : stat.value}
             </h2>
           </div>
         ))}
       </div>
 
-      {/* Filters */}
+      {/* Search and Status Filter */}
       <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row">
         <div className="relative flex-1">
           <Search
@@ -399,7 +621,9 @@ export default function AllLeadsPage() {
           </SelectTrigger>
 
           <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="all">
+              All Statuses
+            </SelectItem>
 
             {leadStatuses.map((status) => (
               <SelectItem key={status} value={status}>
@@ -410,7 +634,7 @@ export default function AllLeadsPage() {
         </Select>
       </div>
 
-      {/* Table */}
+      {/* Leads Table */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         {error && (
           <div
@@ -431,19 +655,21 @@ export default function AllLeadsPage() {
                 <th className="px-5 py-4">Status</th>
                 <th className="px-5 py-4">Source</th>
                 <th className="px-5 py-4">Added</th>
-                <th className="px-5 py-4 text-right">Actions</th>
+                <th className="px-5 py-4 text-right">
+                  Actions
+                </th>
               </tr>
             </thead>
 
             <tbody>
-              {loading ? (
+              {loading || !scopeReady ? (
                 <tr>
                   <td colSpan={7} className="py-20 text-center">
                     <Loader2
                       size={30}
                       className="mx-auto animate-spin text-teal-600"
                     />
-                    <p className="mt-3 text-sm text-slate-500">
+                    <p className="mt-3 text-slate-500">
                       Loading leads...
                     </p>
                   </td>
@@ -456,7 +682,7 @@ export default function AllLeadsPage() {
                   >
                     {error
                       ? "Unable to load leads. Please retry."
-                      : "No leads found. Try another search or add a lead."}
+                      : "No leads found in this workspace."}
                   </td>
                 </tr>
               ) : (
@@ -469,7 +695,6 @@ export default function AllLeadsPage() {
                       <p className="font-semibold text-slate-800">
                         {lead.name}
                       </p>
-
                       <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
                         <Mail size={13} />
                         {lead.email}
@@ -492,7 +717,9 @@ export default function AllLeadsPage() {
 
                     <td className="px-5 py-4">
                       <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[lead.status]}`}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          statusStyles[lead.status]
+                        }`}
                       >
                         {lead.status}
                       </span>
@@ -517,15 +744,26 @@ export default function AllLeadsPage() {
                           <Pencil size={16} />
                         </Button>
 
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          aria-label={`Delete ${lead.name}`}
-                          onClick={() => setDeleteId(lead.id)}
-                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                        >
-                          <Trash2 size={16} />
-                        </Button>
+                        {canDelete && (
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            aria-label={`Delete ${lead.name}`}
+                            onClick={() => setDeleteId(lead.id)}
+                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                        )}
+
+                        {!canDelete && (
+                          <span
+                            title="Members cannot delete workspace leads"
+                            className="flex items-center text-slate-400"
+                          >
+                            <ShieldCheck size={17} />
+                          </span>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -543,7 +781,10 @@ export default function AllLeadsPage() {
               ? 0
               : (currentPage - 1) * PAGE_SIZE + 1}
             {" - "}
-            {Math.min(currentPage * PAGE_SIZE, filteredLeads.length)}
+            {Math.min(
+              currentPage * PAGE_SIZE,
+              filteredLeads.length
+            )}
             {" of "}
             {filteredLeads.length} leads
           </p>
@@ -574,7 +815,7 @@ export default function AllLeadsPage() {
         </div>
       </div>
 
-      {/* Add / Edit Modal */}
+      {/* Add / Edit Dialog */}
       <Dialog
         open={modalOpen}
         onOpenChange={(open) => {
@@ -590,58 +831,82 @@ export default function AllLeadsPage() {
             <DialogDescription>
               {editingId
                 ? "Update the information for this lead."
-                : "Enter the details to create a new lead."}
+                : `Create a lead in ${
+                    isPersonal
+                      ? "Personal Leads"
+                      : activeWorkspace?.name ?? "this workspace"
+                  }.`}
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="lead-name">Full Name *</Label>
+                <Label htmlFor="lead-name">
+                  Full Name *
+                </Label>
                 <Input
                   id="lead-name"
                   required
                   value={form.name}
                   onChange={(e) =>
-                    setForm({ ...form, name: e.target.value })
+                    setForm({
+                      ...form,
+                      name: e.target.value,
+                    })
                   }
                   placeholder="John Smith"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="lead-email">Email *</Label>
+                <Label htmlFor="lead-email">
+                  Email *
+                </Label>
                 <Input
                   id="lead-email"
                   type="email"
                   required
                   value={form.email}
                   onChange={(e) =>
-                    setForm({ ...form, email: e.target.value })
+                    setForm({
+                      ...form,
+                      email: e.target.value,
+                    })
                   }
                   placeholder="john@example.com"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="lead-phone">Phone</Label>
+                <Label htmlFor="lead-phone">
+                  Phone
+                </Label>
                 <Input
                   id="lead-phone"
                   value={form.phone}
                   onChange={(e) =>
-                    setForm({ ...form, phone: e.target.value })
+                    setForm({
+                      ...form,
+                      phone: e.target.value,
+                    })
                   }
                   placeholder="+880 1XXXXXXXXX"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="lead-company">Company</Label>
+                <Label htmlFor="lead-company">
+                  Company
+                </Label>
                 <Input
                   id="lead-company"
                   value={form.company}
                   onChange={(e) =>
-                    setForm({ ...form, company: e.target.value })
+                    setForm({
+                      ...form,
+                      company: e.target.value,
+                    })
                   }
                   placeholder="Company name"
                 />
@@ -665,7 +930,10 @@ export default function AllLeadsPage() {
 
                   <SelectContent>
                     {leadStatuses.map((status) => (
-                      <SelectItem key={status} value={status}>
+                      <SelectItem
+                        key={status}
+                        value={status}
+                      >
                         {status}
                       </SelectItem>
                     ))}
@@ -679,7 +947,10 @@ export default function AllLeadsPage() {
                 <Select
                   value={form.source}
                   onValueChange={(value) =>
-                    setForm({ ...form, source: value })
+                    setForm({
+                      ...form,
+                      source: value,
+                    })
                   }
                 >
                   <SelectTrigger className="w-full">
@@ -688,7 +959,10 @@ export default function AllLeadsPage() {
 
                   <SelectContent>
                     {sources.map((source) => (
-                      <SelectItem key={source} value={source}>
+                      <SelectItem
+                        key={source}
+                        value={source}
+                      >
                         {source}
                       </SelectItem>
                     ))}
@@ -713,7 +987,10 @@ export default function AllLeadsPage() {
                 className="bg-teal-600 hover:bg-teal-700"
               >
                 {saving && (
-                  <Loader2 size={16} className="mr-2 animate-spin" />
+                  <Loader2
+                    size={16}
+                    className="mr-2 animate-spin"
+                  />
                 )}
 
                 {saving
@@ -736,11 +1013,13 @@ export default function AllLeadsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this lead?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Delete this lead?
+            </AlertDialogTitle>
 
             <AlertDialogDescription>
-              This will permanently delete the lead from MongoDB.
-              This action cannot be undone.
+              This will permanently delete the lead from
+              MongoDB. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -758,8 +1037,12 @@ export default function AllLeadsPage() {
               className="bg-red-600 text-white hover:bg-red-700"
             >
               {deleting && (
-                <Loader2 size={16} className="mr-2 animate-spin" />
+                <Loader2
+                  size={16}
+                  className="mr-2 animate-spin"
+                />
               )}
+
               {deleting ? "Deleting..." : "Delete Lead"}
             </AlertDialogAction>
           </AlertDialogFooter>

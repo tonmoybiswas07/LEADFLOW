@@ -4,6 +4,8 @@ import { ObjectId, type Filter } from "mongodb";
 
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 import type { LeadStatus } from "@/types/lead";
 
 interface LeadDocument {
@@ -18,6 +20,17 @@ interface LeadDocument {
   notes?: string;
   createdAt: Date | string;
   updatedAt?: Date | string;
+}
+
+interface WorkspaceDocument {
+  userId: string;
+}
+
+interface WorkspaceMemberDocument {
+  workspaceId: string;
+  userId: string | null;
+  role: "Owner" | "Admin" | "Member";
+  status: "Pending" | "Active";
 }
 
 const allowedRanges = [
@@ -39,12 +52,15 @@ function getStartDate(range: DateRange): Date | null {
     case "7d":
       start.setUTCDate(start.getUTCDate() - 7);
       break;
+
     case "30d":
       start.setUTCDate(start.getUTCDate() - 30);
       break;
+
     case "90d":
       start.setUTCDate(start.getUTCDate() - 90);
       break;
+
     case "12m":
       start.setUTCMonth(start.getUTCMonth() - 12);
       break;
@@ -57,7 +73,8 @@ function getStartDate(range: DateRange): Date | null {
 function escapeCSV(value: unknown): string {
   let text = String(value ?? "");
 
-  if (/^[\s\uFEFF]*[=+\-@\t\r]/u.test(text)) {
+  // Prevent formula execution, including leading whitespace
+  if (/^[\s\uFEFF]*[=+\-@]/u.test(text)) {
     text = "'" + text;
   }
 
@@ -107,11 +124,76 @@ export async function GET(request: NextRequest) {
     const range = requestedRange as DateRange;
     const db = await getDatabase();
 
-    // Validate workspace ownership
-    if (
-      workspaceId !== "all" &&
-      workspaceId !== "unassigned"
-    ) {
+    const filter: Filter<LeadDocument> = {};
+
+    // Personal Leads
+    if (workspaceId === "unassigned") {
+      filter.userId = user.id;
+      filter.workspaceId = null;
+    }
+
+    // All accessible Leads
+    else if (workspaceId === "all") {
+      // Workspaces owned by the current user
+      const ownedWorkspaces = await db
+        .collection<WorkspaceDocument>("workspaces")
+        .find({ userId: user.id })
+        .project({ _id: 1 })
+        .toArray();
+
+      // Active shared workspace memberships
+      const memberships = await db
+        .collection<WorkspaceMemberDocument>(
+          "workspaceMembers"
+        )
+        .find({
+          userId: user.id,
+          status: "Active",
+          role: { $in: ["Admin", "Member"] },
+        })
+        .toArray();
+
+      const workspaceIds = [
+        ...new Set([
+          ...ownedWorkspaces.map((workspace) =>
+            workspace._id.toString()
+          ),
+          ...memberships
+            .map((member) => member.workspaceId)
+            .filter((id) => ObjectId.isValid(id)),
+        ]),
+      ];
+
+      // Ignore memberships referencing deleted workspaces
+      const existingWorkspaces = await db
+        .collection<WorkspaceDocument>("workspaces")
+        .find({
+          _id: {
+            $in: workspaceIds.map(
+              (id) => new ObjectId(id)
+            ),
+          },
+        })
+        .project({ _id: 1 })
+        .toArray();
+
+      const accessibleIds = existingWorkspaces.map(
+        (workspace) => workspace._id.toString()
+      );
+
+      filter.$or = [
+        {
+          userId: user.id,
+          workspaceId: null,
+        },
+        {
+          workspaceId: { $in: accessibleIds },
+        },
+      ];
+    }
+
+    // Specific Workspace
+    else {
       if (!ObjectId.isValid(workspaceId)) {
         return NextResponse.json(
           { message: "Invalid workspace ID" },
@@ -119,31 +201,31 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const workspace = await db
-        .collection("workspaces")
-        .findOne({
-          _id: new ObjectId(workspaceId),
-          userId: user.id,
-        });
+      const access = await getWorkspaceAccess(
+        workspaceId
+      );
 
-      if (!workspace) {
+      if (!access) {
         return NextResponse.json(
-          { message: "Workspace not found" },
-          { status: 404 }
+          {
+            message:
+              "Workspace not found or access denied",
+          },
+          { status: 403 }
         );
       }
-    }
 
-    const filter: Filter<LeadDocument> = {
-      userId: user.id,
-    };
+      if (!hasPermission(access.role, "leads:read")) {
+        return NextResponse.json(
+          { message: "Permission denied" },
+          { status: 403 }
+        );
+      }
 
-    if (workspaceId === "unassigned") {
-      filter.workspaceId = null;
-    } else if (workspaceId !== "all") {
       filter.workspaceId = workspaceId;
     }
 
+    // Fetch accessible leads
     const leads = await db
       .collection<LeadDocument>("leads")
       .find(filter)
@@ -156,12 +238,18 @@ export async function GET(request: NextRequest) {
     const filteredLeads = leads.filter((lead) => {
       const date = new Date(lead.createdAt);
 
-      if (Number.isNaN(date.getTime())) return false;
-      if (date > now) return false;
+      if (Number.isNaN(date.getTime())) {
+        return false;
+      }
+
+      if (date > now) {
+        return false;
+      }
 
       return !startDate || date >= startDate;
     });
 
+    // CSV headers
     const headers = [
       "Name",
       "Email",
@@ -175,6 +263,7 @@ export async function GET(request: NextRequest) {
       "Updated At",
     ];
 
+    // CSV rows
     const rows = filteredLeads.map((lead) => [
       lead.name,
       lead.email,
@@ -195,10 +284,9 @@ export async function GET(request: NextRequest) {
       ),
     ].join("\r\n");
 
-    const filename =
-      `leadflow-leads-${range}-${new Date()
-        .toISOString()
-        .slice(0, 10)}.csv`;
+    const filename = `leadflow-leads-${workspaceId}-${range}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
 
     return new NextResponse("\uFEFF" + csv, {
       status: 200,

@@ -1,9 +1,20 @@
+
 import { NextResponse } from "next/server";
-import { MongoServerError, ObjectId } from "mongodb";
+import {
+  MongoServerError,
+  ObjectId,
+  type Filter,
+} from "mongodb";
 
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
-import { leadStatuses, type LeadStatus } from "@/types/lead";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
+
+import {
+  leadStatuses,
+  type LeadStatus,
+} from "@/types/lead";
 
 interface LeadDocument {
   userId: string;
@@ -17,7 +28,17 @@ interface LeadDocument {
   createdAt: Date;
 }
 
-// Validate lead data
+interface WorkspaceDocument {
+  userId: string;
+}
+
+interface MemberDocument {
+  workspaceId: string;
+  userId: string | null;
+  status: "Pending" | "Active";
+  role: "Owner" | "Admin" | "Member";
+}
+
 function validateLead(body: unknown) {
   if (!body || typeof body !== "object") {
     return null;
@@ -35,7 +56,8 @@ function validateLead(body: unknown) {
       ? data.email.trim().toLowerCase()
       : "";
 
-  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const validEmail =
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const validStatus = leadStatuses.some(
     (status) => status === data.status
@@ -101,25 +123,59 @@ export async function GET() {
 
     const db = await getDatabase();
 
-    const collection = db.collection<LeadDocument>("leads");
+    const collection =
+      db.collection<LeadDocument>("leads");
 
-    // Temporary debug information
-    const totalLeads = await collection.countDocuments();
-
-    const myLeads = await collection.countDocuments({
-      userId: user.id,
-    });
-
-    console.log("========== LEAD DEBUG ==========");
-    console.log("Database:", db.databaseName);
-    console.log("Logged-in User ID:", user.id);
-    console.log("Total Database Leads:", totalLeads);
-    console.log("Current User Leads:", myLeads);
-    console.log("================================");
-
-    // Fetch only the logged-in user's leads
-    const leads = await collection
+    // Workspaces created by the user
+    const ownedWorkspaces = await db
+      .collection<WorkspaceDocument>("workspaces")
       .find({ userId: user.id })
+      .project({ _id: 1 })
+      .toArray();
+
+    const ownedIds = ownedWorkspaces.map(
+      (workspace) => workspace._id.toString()
+    );
+
+    // Active workspace memberships
+    const memberships = await db
+      .collection<MemberDocument>("workspaceMembers")
+      .find({
+        userId: user.id,
+        status: "Active",
+        role: { $in: ["Admin", "Member"] },
+      })
+      .toArray();
+
+    const memberIds = memberships.map(
+      (member) => member.workspaceId
+    );
+
+    const accessibleWorkspaceIds = [
+      ...new Set([...ownedIds, ...memberIds]),
+    ];
+
+    // Keep legacy personal leads accessible.
+    // Shared workspace leads are matched by workspaceId.
+    const filter: Filter<LeadDocument> = {
+      $or: [
+        {
+          userId: user.id,
+          $or: [
+            { workspaceId: null },
+            { workspaceId: { $exists: false } },
+          ],
+        },
+        {
+          workspaceId: {
+            $in: accessibleWorkspaceIds,
+          },
+        },
+      ],
+    };
+
+    const leads = await collection
+      .find(filter)
       .sort({
         createdAt: -1,
         _id: -1,
@@ -135,7 +191,6 @@ export async function GET() {
       status: lead.status,
       source: lead.source,
       workspaceId: lead.workspaceId ?? null,
-
       createdAt: new Date(lead.createdAt)
         .toISOString()
         .slice(0, 10),
@@ -165,7 +220,6 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json().catch(() => null);
-
     const payload = validateLead(body);
 
     if (!payload) {
@@ -180,42 +234,37 @@ export async function POST(request: Request) {
 
     const db = await getDatabase();
 
-    const collection = db.collection<LeadDocument>("leads");
+    const collection =
+      db.collection<LeadDocument>("leads");
 
-    // Verify workspace ownership
+    // Default: personal lead
+    let ownerId = user.id;
+
     if (payload.workspaceId) {
-      const workspace = await db
-        .collection("workspaces")
-        .findOne({
-          _id: new ObjectId(payload.workspaceId),
-          userId: user.id,
-        });
+      const access = await getWorkspaceAccess(
+        payload.workspaceId
+      );
 
-      if (!workspace) {
+      if (
+        !access ||
+        !hasPermission(access.role, "leads:create")
+      ) {
         return NextResponse.json(
           {
             message:
-              "Workspace not found or access denied",
+              "You do not have permission to create leads in this workspace",
           },
-          { status: 404 }
+          { status: 403 }
         );
       }
-    }
 
-    // Prevent duplicate emails for the same user
-    await collection.createIndex(
-      {
-        userId: 1,
-        email: 1,
-      },
-      {
-        unique: true,
-      }
-    );
+  
+      ownerId = access.workspace.userId;
+    }
 
     const newLead: LeadDocument = {
       ...payload,
-      userId: user.id,
+      userId: ownerId,
       createdAt: new Date(),
     };
 

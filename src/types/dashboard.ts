@@ -1,3 +1,4 @@
+
 import type { LeadStatus } from "@/types/lead";
 
 export interface DashboardData {

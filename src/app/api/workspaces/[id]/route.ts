@@ -1,7 +1,11 @@
+
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
+
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 
 interface WorkspaceDocument {
   userId: string;
@@ -25,7 +29,11 @@ const colors = [
   "#059669",
 ];
 
-export async function PATCH(request: Request, context: Context) {
+// PATCH - Update Workspace
+export async function PATCH(
+  request: Request,
+  context: Context
+) {
   try {
     const user = await getCurrentUser();
 
@@ -45,9 +53,32 @@ export async function PATCH(request: Request, context: Context) {
       );
     }
 
+    const access = await getWorkspaceAccess(id);
+
+    if (!access) {
+      return NextResponse.json(
+        { message: "Workspace not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (!hasPermission(access.role, "workspace:update")) {
+      return NextResponse.json(
+        {
+          message:
+            "Only the workspace owner can update settings",
+        },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json().catch(() => null);
 
-    if (!body || typeof body !== "object") {
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body)
+    ) {
       return NextResponse.json(
         { message: "Invalid request body" },
         { status: 400 }
@@ -55,7 +86,9 @@ export async function PATCH(request: Request, context: Context) {
     }
 
     const name =
-      typeof body.name === "string" ? body.name.trim() : "";
+      typeof body.name === "string"
+        ? body.name.trim()
+        : "";
 
     const description =
       typeof body.description === "string"
@@ -63,16 +96,35 @@ export async function PATCH(request: Request, context: Context) {
         : "";
 
     const color =
-      typeof body.color === "string" ? body.color : "";
+      typeof body.color === "string"
+        ? body.color.toLowerCase()
+        : "";
 
-    if (
-      !name ||
-      name.length > 80 ||
-      description.length > 500 ||
-      !colors.includes(color)
-    ) {
+    if (name.length < 2 || name.length > 80) {
       return NextResponse.json(
-        { message: "Invalid workspace information" },
+        {
+          message:
+            "Workspace name must be between 2 and 80 characters",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (description.length > 500) {
+      return NextResponse.json(
+        {
+          message:
+            "Description must be 500 characters or fewer",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!colors.includes(color)) {
+      return NextResponse.json(
+        {
+          message: "Invalid workspace color",
+        },
         { status: 400 }
       );
     }
@@ -94,7 +146,9 @@ export async function PATCH(request: Request, context: Context) {
             updatedAt: new Date(),
           },
         },
-        { returnDocument: "after" }
+        {
+          returnDocument: "after",
+        }
       );
 
     if (!updated) {
@@ -111,6 +165,7 @@ export async function PATCH(request: Request, context: Context) {
       color: updated.color,
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
+      message: "Workspace updated successfully",
     });
   } catch (error) {
     console.error("PATCH workspace error:", error);
@@ -122,7 +177,11 @@ export async function PATCH(request: Request, context: Context) {
   }
 }
 
-export async function DELETE(_request: Request, context: Context) {
+// DELETE - Owner Only
+export async function DELETE(
+  _request: Request,
+  context: Context
+) {
   try {
     const user = await getCurrentUser();
 
@@ -142,6 +201,25 @@ export async function DELETE(_request: Request, context: Context) {
       );
     }
 
+    const access = await getWorkspaceAccess(id);
+
+    if (!access) {
+      return NextResponse.json(
+        { message: "Workspace not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (!hasPermission(access.role, "workspace:delete")) {
+      return NextResponse.json(
+        {
+          message:
+            "Only the workspace owner can delete this workspace",
+        },
+        { status: 403 }
+      );
+    }
+
     const db = await getDatabase();
 
     const result = await db
@@ -158,6 +236,26 @@ export async function DELETE(_request: Request, context: Context) {
       );
     }
 
+    // Remove memberships for the deleted workspace
+    await db.collection("workspaceMembers").deleteMany({
+      workspaceId: id,
+    });
+
+    // Preserve existing leads as personal leads of
+    // their original workspace owner.
+    await db.collection("leads").updateMany(
+      {
+        workspaceId: id,
+        userId: user.id,
+      },
+      {
+        $set: {
+          workspaceId: null,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
     return NextResponse.json({
       message: "Workspace deleted successfully",
     });
@@ -165,7 +263,9 @@ export async function DELETE(_request: Request, context: Context) {
     console.error("DELETE workspace error:", error);
 
     return NextResponse.json(
-      { message: "Failed to delete workspace" },
+      {
+        message: "Failed to delete workspace",
+      },
       { status: 500 }
     );
   }

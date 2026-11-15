@@ -1,8 +1,11 @@
+
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId, type Filter } from "mongodb";
 
 import { getDatabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/lead-auth";
+import { getWorkspaceAccess } from "@/lib/workspace-access";
+import { hasPermission } from "@/lib/team-permissions";
 import { leadStatuses, type LeadStatus } from "@/types/lead";
 
 interface LeadDocument {
@@ -13,6 +16,18 @@ interface LeadDocument {
   status: LeadStatus;
   source: string;
   createdAt: Date | string;
+}
+
+interface WorkspaceDocument {
+  userId: string;
+  name: string;
+}
+
+interface WorkspaceMemberDocument {
+  workspaceId: string;
+  userId: string | null;
+  role: "Owner" | "Admin" | "Member";
+  status: "Pending" | "Active";
 }
 
 const allowedRanges = [
@@ -28,8 +43,7 @@ type DateRange = (typeof allowedRanges)[number];
 function getStartDate(range: DateRange): Date | null {
   if (range === "all") return null;
 
-  const now = new Date();
-  const start = new Date(now);
+  const start = new Date();
 
   switch (range) {
     case "7d":
@@ -80,11 +94,76 @@ export async function GET(request: NextRequest) {
     }
 
     const range = requestedRange as DateRange;
-
     const db = await getDatabase();
 
-    // Workspace ownership validation
-    if (workspaceId !== "all" && workspaceId !== "unassigned") {
+    const filter: Filter<LeadDocument> = {};
+
+    // 1. Personal Leads
+    if (workspaceId === "unassigned") {
+      filter.userId = user.id;
+      filter.workspaceId = null;
+    }
+
+    // 2. All accessible Leads
+    else if (workspaceId === "all") {
+      const ownedWorkspaces = await db
+        .collection<WorkspaceDocument>("workspaces")
+        .find({ userId: user.id })
+        .project({ _id: 1 })
+        .toArray();
+
+      const memberships = await db
+        .collection<WorkspaceMemberDocument>(
+          "workspaceMembers"
+        )
+        .find({
+          userId: user.id,
+          status: "Active",
+          role: { $in: ["Admin", "Member"] },
+        })
+        .toArray();
+
+      const workspaceIds = [
+        ...new Set([
+          ...ownedWorkspaces.map((workspace) =>
+            workspace._id.toString()
+          ),
+          ...memberships
+            .map((member) => member.workspaceId)
+            .filter((id) => ObjectId.isValid(id)),
+        ]),
+      ];
+
+      // Only include memberships for existing workspaces
+      const existingWorkspaces = await db
+        .collection<WorkspaceDocument>("workspaces")
+        .find({
+          _id: {
+            $in: workspaceIds.map(
+              (id) => new ObjectId(id)
+            ),
+          },
+        })
+        .project({ _id: 1 })
+        .toArray();
+
+      const accessibleIds = existingWorkspaces.map(
+        (workspace) => workspace._id.toString()
+      );
+
+      filter.$or = [
+        {
+          userId: user.id,
+          workspaceId: null,
+        },
+        {
+          workspaceId: { $in: accessibleIds },
+        },
+      ];
+    }
+
+    // 3. Selected Workspace
+    else {
       if (!ObjectId.isValid(workspaceId)) {
         return NextResponse.json(
           { message: "Invalid workspace ID" },
@@ -92,28 +171,24 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const workspace = await db
-        .collection("workspaces")
-        .findOne({
-          _id: new ObjectId(workspaceId),
-          userId: user.id,
-        });
+      const access = await getWorkspaceAccess(
+        workspaceId
+      );
 
-      if (!workspace) {
+      if (!access) {
         return NextResponse.json(
-          { message: "Workspace not found" },
-          { status: 404 }
+          { message: "Workspace not found or access denied" },
+          { status: 403 }
         );
       }
-    }
 
-    const filter: Filter<LeadDocument> = {
-      userId: user.id,
-    };
+      if (!hasPermission(access.role, "leads:read")) {
+        return NextResponse.json(
+          { message: "Permission denied" },
+          { status: 403 }
+        );
+      }
 
-    if (workspaceId === "unassigned") {
-      filter.workspaceId = null;
-    } else if (workspaceId !== "all") {
       filter.workspaceId = workspaceId;
     }
 
@@ -128,13 +203,18 @@ export async function GET(request: NextRequest) {
     const filteredLeads = leads.filter((lead) => {
       const date = new Date(lead.createdAt);
 
-      if (Number.isNaN(date.getTime())) return false;
+      if (Number.isNaN(date.getTime())) {
+        return false;
+      }
 
-      if (date > now) return false;
+      if (date > now) {
+        return false;
+      }
 
       return !startDate || date >= startDate;
     });
 
+    // Statistics
     const totalLeads = filteredLeads.length;
 
     const convertedLeads = filteredLeads.filter(
@@ -150,11 +230,14 @@ export async function GET(request: NextRequest) {
 
     const conversionRate = totalLeads
       ? Number(
-          ((convertedLeads / totalLeads) * 100).toFixed(1)
+          (
+            (convertedLeads / totalLeads) *
+            100
+          ).toFixed(1)
         )
       : 0;
 
-    // Status distribution
+    // Status Distribution
     const statusDistribution = leadStatuses.map(
       (status) => ({
         name: status,
@@ -164,11 +247,12 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    // Source distribution
+    // Source Distribution
     const sourceMap = new Map<string, number>();
 
     filteredLeads.forEach((lead) => {
-      const source = lead.source?.trim() || "Unknown";
+      const source =
+        lead.source?.trim() || "Unknown";
 
       sourceMap.set(
         source,
@@ -179,10 +263,13 @@ export async function GET(request: NextRequest) {
     const sourceDistribution = Array.from(
       sourceMap.entries()
     )
-      .map(([name, value]) => ({ name, value }))
+      .map(([name, value]) => ({
+        name,
+        value,
+      }))
       .sort((a, b) => b.value - a.value);
 
-    // Monthly chart for the selected date range
+    // Monthly Growth
     const validDates = filteredLeads.map((lead) => ({
       ...lead,
       parsedDate: new Date(lead.createdAt),
@@ -216,7 +303,11 @@ export async function GET(request: NextRequest) {
       1
     );
 
-    const monthlyGrowth = [];
+    const monthlyGrowth: {
+      label: string;
+      leads: number;
+      converted: number;
+    }[] = [];
 
     const cursor = new Date(startMonth);
 
@@ -242,7 +333,9 @@ export async function GET(request: NextRequest) {
         ).length,
       });
 
-      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+      cursor.setUTCMonth(
+        cursor.getUTCMonth() + 1
+      );
     }
 
     return NextResponse.json({

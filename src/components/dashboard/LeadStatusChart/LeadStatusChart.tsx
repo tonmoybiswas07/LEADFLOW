@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -9,24 +10,43 @@ import {
 } from "recharts";
 import { ChartPie, ArrowUpRight } from "lucide-react";
 
-const leadStatusData = [
-  { name: "New", value: 35, color: "#0d9488" },
-  { name: "Contacted", value: 25, color: "#3b82f6" },
-  { name: "Qualified", value: 20, color: "#8b5cf6" },
-  { name: "Converted", value: 15, color: "#10b981" },
-  { name: "Lost", value: 5, color: "#f59e0b" },
-];
+import type { DashboardData } from "@/types/dashboard";
 
-const total = leadStatusData.reduce(
-  (sum, item) => sum + item.value,
-  0
-);
+interface Props {
+  data: DashboardData["statusDistribution"];
+}
 
-export default function LeadStatusChart() {
+const statusColors: Record<string, string> = {
+  New: "#0d9488",
+  Contacted: "#3b82f6",
+  Qualified: "#8b5cf6",
+  Converted: "#10b981",
+  Lost: "#f59e0b",
+};
+
+export default function LeadStatusChart({ data }: Props) {
+  const leadStatusData = data.map((item) => ({
+    ...item,
+    color: statusColors[item.name] || "#64748b",
+  }));
+
+  const total = leadStatusData.reduce(
+    (sum, item) => sum + item.value,
+    0
+  );
+
+  const converted =
+    leadStatusData.find(
+      (item) => item.name === "Converted"
+    )?.value ?? 0;
+
+  const conversionRate =
+    total > 0
+      ? ((converted / total) * 100).toFixed(1)
+      : "0.0";
+
   return (
     <div className="h-full rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-
-      {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-bold text-slate-900">
@@ -43,45 +63,50 @@ export default function LeadStatusChart() {
         </div>
       </div>
 
-      {/* Donut Chart */}
       <div className="relative mt-6 h-[250px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={leadStatusData}
-              cx="50%"
-              cy="50%"
-              innerRadius={72}
-              outerRadius={100}
-              paddingAngle={4}
-              cornerRadius={5}
-              dataKey="value"
-              stroke="none"
-            >
-              {leadStatusData.map((entry) => (
-                <Cell
-                  key={entry.name}
-                  fill={entry.color}
-                />
-              ))}
-            </Pie>
+        {total > 0 ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={leadStatusData}
+                cx="50%"
+                cy="50%"
+                innerRadius={72}
+                outerRadius={100}
+                paddingAngle={4}
+                cornerRadius={5}
+                dataKey="value"
+                nameKey="name"
+                stroke="none"
+              >
+                {leadStatusData.map((entry) => (
+                  <Cell
+                    key={entry.name}
+                    fill={entry.color}
+                  />
+                ))}
+              </Pie>
 
-            <Tooltip
-              formatter={(value, name) => [
-                `${value} leads`,
-                name,
-              ]}
-              contentStyle={{
-                backgroundColor: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                fontSize: "13px",
-              }}
-            />
-          </PieChart>
-        </ResponsiveContainer>
+              <Tooltip
+                formatter={(value, name) => [
+                  `${value} leads`,
+                  name,
+                ]}
+                contentStyle={{
+                  backgroundColor: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "12px",
+                  fontSize: "13px",
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <div className="h-[190px] w-[190px] rounded-full border-[25px] border-slate-100" />
+          </div>
+        )}
 
-        {/* Center Label */}
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-3xl font-bold text-slate-900">
             {total}
@@ -93,7 +118,6 @@ export default function LeadStatusChart() {
         </div>
       </div>
 
-      {/* Status Legend */}
       <div className="mt-4 space-y-4">
         {leadStatusData.map((item) => {
           const percentage =
@@ -109,7 +133,9 @@ export default function LeadStatusChart() {
               <div className="flex items-center gap-3">
                 <span
                   className="h-3 w-3 rounded-full"
-                  style={{ backgroundColor: item.color }}
+                  style={{
+                    backgroundColor: item.color,
+                  }}
                 />
 
                 <span className="text-sm font-medium text-slate-600">
@@ -131,7 +157,6 @@ export default function LeadStatusChart() {
         })}
       </div>
 
-      {/* Footer */}
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <div>
           <p className="text-xs text-slate-400">
@@ -139,11 +164,7 @@ export default function LeadStatusChart() {
           </p>
 
           <p className="mt-1 text-xl font-bold text-teal-600">
-            {total > 0
-              ? ((leadStatusData.find(
-                  (item) => item.name === "Converted"
-                )?.value ?? 0) / total * 100).toFixed(1)
-              : "0.0"}%
+            {conversionRate}%
           </p>
         </div>
 
